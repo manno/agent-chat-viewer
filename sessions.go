@@ -55,10 +55,14 @@ func findSessions(home string) []Session {
 	})
 
 	claudePath := filepath.Join(home, ".claude", "projects")
+	// Claude encodes the project's absolute path as the directory name, replacing
+	// '/' with '-'.  Strip the home-dir prefix so we show only the relative part.
+	homePrefix := strings.ReplaceAll(home, string(os.PathSeparator), "-") + "-"
 	filepath.Walk(claudePath, func(path string, info os.FileInfo, err error) error {
 		if err == nil && !info.IsDir() && strings.HasSuffix(path, ".jsonl") {
 			if s, err := parseClaude(path); err == nil {
 				s.Size = info.Size()
+				s.Project = strings.TrimPrefix(s.Project, homePrefix)
 				sessions = append(sessions, *s)
 			}
 		}
