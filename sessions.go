@@ -33,6 +33,7 @@ func findSessions(home string) []Session {
 	var sessions []Session
 
 	copilotPath := filepath.Join(home, ".copilot", "session-state")
+	// Older Copilot CLI versions wrote a single flat <uuid>.jsonl per session.
 	files, _ := filepath.Glob(filepath.Join(copilotPath, "*.jsonl"))
 	for _, f := range files {
 		if s, err := parseCopilot(f); err == nil {
@@ -41,6 +42,22 @@ func findSessions(home string) []Session {
 			}
 			sessions = append(sessions, *s)
 		}
+	}
+	// Newer versions store each session as a directory containing events.jsonl and workspace.yaml.
+	entries, _ := os.ReadDir(copilotPath)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(copilotPath, entry.Name())
+		s, err := parseCopilotDir(dir)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(dir, "events.jsonl")); err == nil {
+			s.Size = info.Size()
+		}
+		sessions = append(sessions, *s)
 	}
 
 	geminiPath := filepath.Join(home, ".gemini", "tmp")
@@ -82,6 +99,10 @@ func findAndSortSessions(home string) []Session {
 
 func parseSession(path string) (*Session, error) {
 	if strings.Contains(path, ".copilot") {
+		// Directory-based session (new format)
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			return parseCopilotDir(path)
+		}
 		return parseCopilot(path)
 	}
 	if strings.Contains(path, ".gemini") {
@@ -91,6 +112,39 @@ func parseSession(path string) (*Session, error) {
 		return parseClaude(path)
 	}
 	return nil, fmt.Errorf("unknown session type for path: %s", path)
+}
+
+func parseCopilotDir(dir string) (*Session, error) {
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	s, err := parseCopilot(eventsPath)
+	if err != nil {
+		return nil, err
+	}
+	s.ID = filepath.Base(dir)
+
+	// workspace.yaml holds reliable project path and timestamps.
+	if data, err := os.ReadFile(filepath.Join(dir, "workspace.yaml")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			k, v, ok := strings.Cut(line, ": ")
+			if !ok {
+				continue
+			}
+			k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+			switch k {
+			case "cwd":
+				s.Project = filepath.Base(v)
+			case "created_at":
+				if t, err := time.Parse(time.RFC3339, v); err == nil {
+					s.StartTime = t
+				}
+			case "updated_at":
+				if t, err := time.Parse(time.RFC3339, v); err == nil {
+					s.LastTime = t
+				}
+			}
+		}
+	}
+	return s, nil
 }
 
 func parseCopilot(path string) (*Session, error) {
@@ -126,9 +180,9 @@ func parseCopilot(path string) (*Session, error) {
 			s.StartTime = line.Timestamp
 			s.LastTime = line.Timestamp
 		}
-		if line.Type == "user.message" {
+		if line.Type == "user.message" && line.Data.Content != "" {
 			s.Messages = append(s.Messages, Message{Role: "user", Content: line.Data.Content, Time: line.Timestamp})
-		} else if line.Type == "assistant.message" {
+		} else if line.Type == "assistant.message" && line.Data.Content != "" {
 			s.Messages = append(s.Messages, Message{Role: "assistant", Content: line.Data.Content, Time: line.Timestamp})
 		}
 		if !line.Timestamp.IsZero() {

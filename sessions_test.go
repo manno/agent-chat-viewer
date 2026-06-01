@@ -164,7 +164,66 @@ func TestParseClaude_MalformedLines(t *testing.T) {
 	}
 }
 
-// ── findAndSortSessions ───────────────────────────────────────────────────────
+// ── parseCopilotDir ───────────────────────────────────────────────────────────
+
+func writeCopilotDir(t *testing.T, id, eventsContent, workspaceContent string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), ".copilot", "session-state", id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(eventsContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceContent != "" {
+		if err := os.WriteFile(filepath.Join(dir, "workspace.yaml"), []byte(workspaceContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestParseCopilotDir_BasicMessages(t *testing.T) {
+	events := strings.Join([]string{
+		`{"type":"session.start","data":{},"id":"s1","timestamp":"2026-01-01T09:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"hello"},"id":"m1","timestamp":"2026-01-01T09:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"hi"},"id":"m2","timestamp":"2026-01-01T09:00:02Z"}`,
+	}, "\n")
+	workspace := "cwd: /home/user/my-project\ncreated_at: 2026-01-01T09:00:00Z\nupdated_at: 2026-01-01T10:00:00Z\n"
+
+	dir := writeCopilotDir(t, "test-uuid", events, workspace)
+	s, err := parseCopilotDir(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.ID != "test-uuid" {
+		t.Errorf("ID = %q, want %q", s.ID, "test-uuid")
+	}
+	if s.Project != "my-project" {
+		t.Errorf("Project = %q, want %q", s.Project, "my-project")
+	}
+	if len(s.Messages) != 2 {
+		t.Fatalf("got %d messages, want 2", len(s.Messages))
+	}
+	wantUpdated := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	if !s.LastTime.Equal(wantUpdated) {
+		t.Errorf("LastTime = %v, want %v (from workspace.yaml updated_at)", s.LastTime, wantUpdated)
+	}
+}
+
+func TestParseCopilotDir_NoWorkspace(t *testing.T) {
+	events := `{"type":"user.message","data":{"content":"hi"},"id":"m1","timestamp":"2026-01-01T09:00:00Z"}`
+	dir := writeCopilotDir(t, "no-workspace", events, "")
+	s, err := parseCopilotDir(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(s.Messages) != 1 {
+		t.Errorf("got %d messages, want 1", len(s.Messages))
+	}
+}
+
+
 
 func TestFindAndSortSessions_OrderedByLastTime(t *testing.T) {
 	s1 := Session{LastTime: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)}
