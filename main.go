@@ -66,6 +66,17 @@ func main() {
 	args := flag.Args()
 	if len(args) > 0 {
 		arg := args[0]
+
+		// "acv search <query>" subcommand
+		if arg == "search" {
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "Usage: acv search <query>")
+				os.Exit(1)
+			}
+			runSearch(sessions, strings.Join(args[1:], " "))
+			return
+		}
+
 		var session *Session
 
 		idx, idxErr := strconv.Atoi(arg)
@@ -82,6 +93,11 @@ func main() {
 				if info, errStat := os.Stat(arg); errStat == nil {
 					session.Size = info.Size()
 				}
+			}
+			// If arg is not a valid path or index, treat it as a search query.
+			if err != nil && !strings.Contains(arg, string(os.PathSeparator)) {
+				runSearch(sessions, strings.Join(args, " "))
+				return
 			}
 		}
 
@@ -115,6 +131,7 @@ func main() {
 		}
 	}
 	fmt.Println("\nTo view a session: acv <index> [user|assistant]")
+	fmt.Println("To search sessions: acv <query>  or  acv search <query>  or  acv -f <query>")
 	fmt.Println("To show start times: acv -s")
 	fmt.Println("To list memories:   acv -memories [-project NAME]")
 	fmt.Println("To list artifacts:  acv -files [-agent NAME] [-project NAME]")
