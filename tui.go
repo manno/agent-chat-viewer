@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -205,6 +206,7 @@ type tuiModel struct {
 
 	selected   *Session
 	roleFilter string
+	saveStatus string
 }
 
 func newTUI() tuiModel {
@@ -568,21 +570,34 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.view = viewList
 		m.selected = nil
 		m.roleFilter = ""
+		m.saveStatus = ""
+		return m, nil
+
+	case "s":
+		path, err := m.saveCurrentSession()
+		if err != nil {
+			m.saveStatus = "error: " + err.Error()
+		} else {
+			m.saveStatus = "saved → " + path
+		}
 		return m, nil
 
 	case "u":
+		m.saveStatus = ""
 		m.roleFilter = "user"
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoTop()
 		return m, nil
 
 	case "a":
+		m.saveStatus = ""
 		m.roleFilter = "assistant"
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoTop()
 		return m, nil
 
 	case "0":
+		m.saveStatus = ""
 		m.roleFilter = ""
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoTop()
@@ -658,6 +673,15 @@ func (m tuiModel) handleMemoryDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "esc":
 		m.view = viewMemories
 		m.selectedMemory = nil
+		m.saveStatus = ""
+		return m, nil
+	case "s":
+		path, err := m.saveCurrentMemory()
+		if err != nil {
+			m.saveStatus = "error: " + err.Error()
+		} else {
+			m.saveStatus = "saved → " + path
+		}
 		return m, nil
 	case "g":
 		m.viewport.GotoTop()
@@ -727,6 +751,15 @@ func (m tuiModel) handleArtifactDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "esc":
 		m.view = viewArtifacts
 		m.selectedArtifact = nil
+		m.saveStatus = ""
+		return m, nil
+	case "s":
+		path, err := m.saveCurrentArtifact()
+		if err != nil {
+			m.saveStatus = "error: " + err.Error()
+		} else {
+			m.saveStatus = "saved → " + path
+		}
 		return m, nil
 	case "g":
 		m.viewport.GotoTop()
@@ -910,7 +943,10 @@ func (m tuiModel) detailView() string {
 	vpView := m.viewport.View()
 
 	pct := fmt.Sprintf("%3.f%%", m.viewport.ScrollPercent()*100)
-	helpLeft := " ↑↓/jk: scroll  PgUp/PgDn: page  g/G: top/bottom  u: user  a: assistant  0: all  q: back"
+	helpLeft := " ↑↓/jk: scroll  PgUp/PgDn: page  g/G: top/bottom  u: user  a: assistant  0: all  s: save  q: back"
+	if m.saveStatus != "" {
+		helpLeft = "  " + m.saveStatus
+	}
 	helpRight := pct + "  "
 	help := statusBarStyle.Width(m.width).Render(
 		helpLeft + strings.Repeat(" ", max(1, m.width-len(helpLeft)-len(helpRight))) + helpRight,
@@ -938,7 +974,10 @@ func (m tuiModel) memoryDetailView() string {
 	vpView := m.viewport.View()
 
 	pct := fmt.Sprintf("%3.f%%", m.viewport.ScrollPercent()*100)
-	helpLeft := " ↑↓/jk: scroll  PgUp/PgDn: page  g/G: top/bottom  q: back"
+	helpLeft := " ↑↓/jk: scroll  PgUp/PgDn: page  g/G: top/bottom  s: save  q: back"
+	if m.saveStatus != "" {
+		helpLeft = "  " + m.saveStatus
+	}
 	helpRight := pct + "  "
 	help := statusBarStyle.Width(m.width).Render(
 		helpLeft + strings.Repeat(" ", max(1, m.width-len(helpLeft)-len(helpRight))) + helpRight,
@@ -972,7 +1011,10 @@ func (m tuiModel) artifactDetailView() string {
 	vpView := m.viewport.View()
 
 	pct := fmt.Sprintf("%3.f%%", m.viewport.ScrollPercent()*100)
-	helpLeft := " ↑↓/jk: scroll  PgUp/PgDn: page  g/G: top/bottom  q: back"
+	helpLeft := " ↑↓/jk: scroll  PgUp/PgDn: page  g/G: top/bottom  s: save  q: back"
+	if m.saveStatus != "" {
+		helpLeft = "  " + m.saveStatus
+	}
 	helpRight := pct + "  "
 	help := statusBarStyle.Width(m.width).Render(
 		helpLeft + strings.Repeat(" ", max(1, m.width-len(helpLeft)-len(helpRight))) + helpRight,
@@ -1311,6 +1353,97 @@ func buildSnippet(content string, re *regexp.Regexp, maxLen int) string {
 		snippet = snippet + "…"
 	}
 	return truncate(snippet, maxLen)
+}
+
+// ── save helpers ──────────────────────────────────────────────────────────────
+
+func filenameSafe(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	result := regexp.MustCompile(`-+`).ReplaceAllString(b.String(), "-")
+	return strings.Trim(result, "-")
+}
+
+func (m tuiModel) saveCurrentSession() (string, error) {
+	s := m.selected
+	if s == nil {
+		return "", fmt.Errorf("no session selected")
+	}
+	project := filenameSafe(filepath.Base(s.Project))
+	if project == "" {
+		project = "unknown"
+	}
+	ts := s.LastTime.Format("2006-01-02_150405")
+	name := fmt.Sprintf("session-%s-%s-%s.md", s.Agent, project, ts)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# Session: %s / %s\n\n", s.Agent, s.Project))
+	sb.WriteString(fmt.Sprintf("- **Date:** %s\n", s.LastTime.Format("2006-01-02 15:04")))
+	sb.WriteString(fmt.Sprintf("- **ID:** %s\n", s.ID))
+	sb.WriteString(fmt.Sprintf("- **Messages:** %d\n\n", len(s.Messages)))
+
+	sep := strings.Repeat("─", 80)
+	for _, msg := range s.Messages {
+		timeStr := msg.Time.Format("15:04:05")
+		sb.WriteString(fmt.Sprintf("## %s  %s\n\n", strings.ToUpper(msg.Role), timeStr))
+		sb.WriteString(sep + "\n\n")
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n\n")
+	}
+
+	if err := os.WriteFile(name, []byte(sb.String()), 0o644); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func (m tuiModel) saveCurrentMemory() (string, error) {
+	mem := m.selectedMemory
+	if mem == nil {
+		return "", fmt.Errorf("no memory selected")
+	}
+	base := filenameSafe(mem.Name)
+	if base == "" {
+		base = filenameSafe(filepath.Base(mem.Path))
+	}
+	name := fmt.Sprintf("memory-%s.md", base)
+
+	data, err := os.ReadFile(mem.Path)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(name, data, 0o644); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func (m tuiModel) saveCurrentArtifact() (string, error) {
+	a := m.selectedArtifact
+	if a == nil {
+		return "", fmt.Errorf("no artifact selected")
+	}
+	ext := filepath.Ext(a.Name)
+	base := filenameSafe(strings.TrimSuffix(a.Name, ext))
+	if base == "" {
+		base = "artifact"
+	}
+	name := fmt.Sprintf("artifact-%s%s", base, ext)
+
+	data, err := os.ReadFile(a.Path)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(name, data, 0o644); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // ── misc helpers ──────────────────────────────────────────────────────────────
