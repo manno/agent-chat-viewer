@@ -72,6 +72,17 @@ func findSessions(home string) []Session {
 		return nil
 	})
 
+	agyPath := filepath.Join(home, ".gemini", "antigravity-cli", "brain")
+	filepath.Walk(agyPath, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && filepath.Base(path) == "transcript.jsonl" && strings.Contains(path, "/.system_generated/logs/") {
+			if s, err := parseAgy(path, home); err == nil {
+				s.Size = info.Size()
+				sessions = append(sessions, *s)
+			}
+		}
+		return nil
+	})
+
 	claudePath := filepath.Join(home, ".claude", "projects")
 	// Claude encodes the project's absolute path as the directory name, replacing
 	// '/' with '-'.  Strip the home-dir prefix so we show only the relative part.
@@ -105,6 +116,13 @@ func parseSession(path string) (*Session, error) {
 			return parseCopilotDir(path)
 		}
 		return parseCopilot(path)
+	}
+	if strings.Contains(path, "antigravity-cli") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		return parseAgy(path, home)
 	}
 	if strings.Contains(path, ".gemini") {
 		return parseGemini(path)
@@ -482,4 +500,141 @@ func extractTitle(messages []Message) string {
 	}
 
 	return cleaned
+}
+
+func parseAgy(path string, home string) (*Session, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	s := &Session{
+		Agent: "agy",
+		Path:  path,
+	}
+
+	// Extract conversation ID from path
+	parts := strings.Split(path, string(os.PathSeparator))
+	for i, p := range parts {
+		if p == "brain" && i+1 < len(parts) {
+			s.ID = parts[i+1]
+			break
+		}
+	}
+	if s.ID == "" {
+		s.ID = filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path))))
+	}
+
+	// Try cache mapping first
+	s.Project = getProjectFromCache(home, s.ID)
+
+	type AgyLine struct {
+		Type      string            `json:"type"`
+		CreatedAt string            `json:"created_at"`
+		Content   string            `json:"content"`
+		Thinking  string            `json:"thinking"`
+		ToolCalls []struct {
+			Name string          `json:"name"`
+			Args json.RawMessage `json:"args"`
+		} `json:"tool_calls"`
+	}
+
+	scanner := bufio.NewScanner(file)
+	// Give a generous buffer size for large transcript lines
+	scanner.Buffer(make([]byte, 16*1024*1024), 16*1024*1024)
+	for scanner.Scan() {
+		var line AgyLine
+		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+			continue
+		}
+
+		ts, _ := time.Parse(time.RFC3339, line.CreatedAt)
+		if !ts.IsZero() {
+			if s.StartTime.IsZero() {
+				s.StartTime = ts
+			}
+			s.LastTime = ts
+		}
+
+		// Try to extract project path from tool calls if project is still empty
+		if s.Project == "" {
+			for _, tc := range line.ToolCalls {
+				var args map[string]string
+				if err := json.Unmarshal(tc.Args, &args); err == nil {
+					cwd := args["Cwd"]
+					if cwd == "" {
+						cwd = args["DirectoryPath"]
+					}
+					if cwd != "" {
+						cwd = strings.Trim(cwd, "\"")
+						s.Project = filepath.Base(cwd)
+						break
+					}
+				}
+			}
+		}
+
+		if line.Type == "USER_INPUT" {
+			cleaned := cleanUserContent(line.Content)
+			if cleaned != "" {
+				s.Messages = append(s.Messages, Message{Role: "user", Content: cleaned, Time: ts})
+			}
+		} else if line.Type == "PLANNER_RESPONSE" {
+			var fullContent strings.Builder
+			if line.Thinking != "" {
+				fullContent.WriteString("[Thinking] " + line.Thinking + "\n\n")
+			}
+			fullContent.WriteString(line.Content)
+			if fullContent.Len() > 0 {
+				s.Messages = append(s.Messages, Message{Role: "assistant", Content: fullContent.String(), Time: ts})
+			}
+		}
+	}
+
+	if s.Project == "" {
+		s.Project = "unknown"
+	}
+
+	s.Title = extractTitle(s.Messages)
+	return s, nil
+}
+
+func getProjectFromCache(home string, id string) string {
+	lastConversationsPath := filepath.Join(home, ".gemini", "antigravity-cli", "cache", "last_conversations.json")
+	if data, err := os.ReadFile(lastConversationsPath); err == nil {
+		var mapping map[string]string
+		if err := json.Unmarshal(data, &mapping); err == nil {
+			for projectPath, convID := range mapping {
+				if convID == id {
+					return filepath.Base(projectPath)
+				}
+			}
+		}
+	}
+	
+	projectsPath := filepath.Join(home, ".gemini", "antigravity-cli", "cache", "projects.json")
+	if data, err := os.ReadFile(projectsPath); err == nil {
+		var mapping map[string]string
+		if err := json.Unmarshal(data, &mapping); err == nil {
+			for projectPath, convID := range mapping {
+				if convID == id {
+					return filepath.Base(projectPath)
+				}
+			}
+		}
+	}
+	
+	return ""
+}
+
+func cleanUserContent(content string) string {
+	start := strings.Index(content, "<USER_REQUEST>")
+	if start != -1 {
+		end := strings.Index(content, "</USER_REQUEST>")
+		if end != -1 && end > start {
+			return strings.TrimSpace(content[start+len("<USER_REQUEST>"):end])
+		}
+	}
+	return content
 }

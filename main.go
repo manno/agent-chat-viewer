@@ -17,7 +17,7 @@ func main() {
 	noTUI       := flag.Bool("no-tui", false, "Disable TUI, use plain CLI output")
 	showMem     := flag.Bool("memories", false, "List agent memory files")
 	showFiles   := flag.Bool("files", false, "List agent artifact files (tool-results, logs)")
-	agentFilter := flag.String("agent", "", "Filter by agent name (claude/gemini/copilot)")
+	agentFilter := flag.String("agent", "", "Filter by agent name (claude/gemini/copilot/agy)")
 	projFilter  := flag.String("project", "", "Filter by project name (substring match)")
 	flag.Parse()
 

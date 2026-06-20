@@ -320,3 +320,96 @@ func TestExtractTitle(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanUserContent(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"hello", "hello"},
+		{"<USER_REQUEST>\nhello world\n</USER_REQUEST>\nsome suffix", "hello world"},
+		{"<USER_REQUEST>abc</USER_REQUEST>", "abc"},
+		{"no match", "no match"},
+	}
+	for _, c := range cases {
+		got := cleanUserContent(c.in)
+		if got != c.want {
+			t.Errorf("cleanUserContent(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestParseAgy_Basic(t *testing.T) {
+	jsonl := strings.Join([]string{
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-06-20T21:13:10Z","content":"<USER_REQUEST>\nhello world\n</USER_REQUEST>"}`,
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-06-20T21:13:15Z","thinking":"thinking hard","content":"response here","tool_calls":[{"name":"run_command","args":{"Cwd":"\"/home/mm/co/my-test-proj\""}}]}`,
+	}, "\n")
+
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, ".gemini", "antigravity-cli", "brain", "my-session-uuid", ".system_generated", "logs", "transcript.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(jsonl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := parseAgy(path, tempDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if s.Agent != "agy" {
+		t.Errorf("Agent = %q, want %q", s.Agent, "agy")
+	}
+	if s.ID != "my-session-uuid" {
+		t.Errorf("ID = %q, want %q", s.ID, "my-session-uuid")
+	}
+	if s.Project != "my-test-proj" {
+		t.Errorf("Project = %q, want %q (extracted from Cwd in tool_calls)", s.Project, "my-test-proj")
+	}
+	if len(s.Messages) != 2 {
+		t.Fatalf("got %d messages, want 2", len(s.Messages))
+	}
+	if s.Messages[0].Role != "user" || s.Messages[0].Content != "hello world" {
+		t.Errorf("unexpected first message: %+v", s.Messages[0])
+	}
+	if s.Messages[1].Role != "assistant" || s.Messages[1].Content != "[Thinking] thinking hard\n\nresponse here" {
+		t.Errorf("unexpected second message: %+v", s.Messages[1])
+	}
+}
+
+func TestParseAgy_WithCache(t *testing.T) {
+	jsonl := strings.Join([]string{
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-06-20T21:13:10Z","content":"<USER_REQUEST>\nhello world\n</USER_REQUEST>"}`,
+	}, "\n")
+
+	tempDir := t.TempDir()
+	
+	// Create cache file
+	cacheDir := filepath.Join(tempDir, ".gemini", "antigravity-cli", "cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cacheContent := `{"/home/mm/co/cache-project-path": "cache-session-uuid"}`
+	if err := os.WriteFile(filepath.Join(cacheDir, "last_conversations.json"), []byte(cacheContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(tempDir, ".gemini", "antigravity-cli", "brain", "cache-session-uuid", ".system_generated", "logs", "transcript.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(jsonl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := parseAgy(path, tempDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if s.Project != "cache-project-path" {
+		t.Errorf("Project = %q, want %q (extracted from last_conversations.json)", s.Project, "cache-project-path")
+	}
+}

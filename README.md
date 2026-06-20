@@ -7,6 +7,8 @@ A terminal UI for browsing and searching chat history from AI agent CLIs.
 - **Claude Code** — `~/.claude/projects/`
 - **Gemini CLI** — `~/.gemini/tmp/`
 - **GitHub Copilot CLI** — `~/.copilot/session-state/`
+- **Google Antigravity CLI (`agy`)** — `~/.gemini/antigravity-cli/brain/`
+
 
 ## Installation
 

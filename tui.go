@@ -107,6 +107,7 @@ var (
 		"claude":  {Dark: "81", Light: "25"},
 		"gemini":  {Dark: "214", Light: "130"},
 		"copilot": {Dark: "119", Light: "28"},
+		"agy":     {Dark: "135", Light: "57"},
 	}
 )
 
