@@ -27,6 +27,7 @@ type Session struct {
 	StartTime time.Time
 	LastTime  time.Time
 	Messages  []Message
+	Title     string
 }
 
 func findSessions(home string) []Session {
@@ -197,6 +198,7 @@ func parseCopilot(path string) (*Session, error) {
 	if s.LastTime.IsZero() && len(s.Messages) > 0 {
 		s.LastTime = s.Messages[len(s.Messages)-1].Time
 	}
+	s.Title = extractTitle(s.Messages)
 	return s, nil
 }
 
@@ -267,6 +269,7 @@ func parseGemini(path string) (*Session, error) {
 			}
 		}
 	}
+	s.Title = extractTitle(s.Messages)
 	return s, nil
 }
 
@@ -338,6 +341,7 @@ func parseClaude(path string) (*Session, error) {
 			s.Messages = append(s.Messages, Message{Role: role, Content: fullContent.String(), Time: ts})
 		}
 	}
+	s.Title = extractTitle(s.Messages)
 	return s, nil
 }
 
@@ -356,6 +360,7 @@ func formatSize(b int64) string {
 
 func printSession(s *Session, filter string) {
 	fmt.Printf("Session: %s\n", s.ID)
+	fmt.Printf("Title:   %s\n", s.Title)
 	fmt.Printf("Agent:   %s\n", s.Agent)
 	fmt.Printf("Project: %s\n", s.Project)
 	fmt.Printf("Start:   %s\n", s.StartTime.Format(time.RFC1123))
@@ -400,4 +405,81 @@ func runSearch(sessions []Session, query string) {
 		}
 	}
 	fmt.Printf("\nFound %d matches in %d sessions.\n", found, len(sessions))
+}
+
+func extractTitle(messages []Message) string {
+	var rawTitle string
+	for _, m := range messages {
+		if m.Content != "" {
+			rawTitle = m.Content
+			if m.Role == "user" {
+				break
+			}
+		}
+	}
+
+	if rawTitle == "" {
+		return "Empty Session"
+	}
+
+	// Split by newline and find the first non-empty line (ignoring code fences)
+	lines := strings.Split(rawTitle, "\n")
+	var firstLine string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "```") {
+			firstLine = trimmed
+			break
+		}
+	}
+
+	if firstLine == "" {
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" {
+				firstLine = trimmed
+				break
+			}
+		}
+	}
+
+	if firstLine == "" {
+		return "Empty Session"
+	}
+
+	cleaned := firstLine
+	for {
+		old := cleaned
+		cleaned = strings.TrimSpace(cleaned)
+		cleaned = strings.TrimLeft(cleaned, "#*-> \t")
+		
+		// If it starts with a number followed by dot and space (like "1. "), strip it
+		if len(cleaned) > 2 && cleaned[0] >= '0' && cleaned[0] <= '9' {
+			idx := 0
+			for idx < len(cleaned) && cleaned[idx] >= '0' && cleaned[idx] <= '9' {
+				idx++
+			}
+			if idx < len(cleaned) && cleaned[idx] == '.' {
+				cleaned = cleaned[idx+1:]
+			}
+		}
+		if cleaned == old {
+			break
+		}
+	}
+
+	cleaned = strings.TrimSpace(cleaned)
+
+	if strings.HasPrefix(cleaned, "```") {
+		cleaned = strings.TrimPrefix(cleaned, "```")
+		cleaned = strings.TrimLeft(cleaned, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+	}
+
+	cleaned = strings.TrimSpace(cleaned)
+
+	if cleaned == "" {
+		cleaned = strings.TrimSpace(firstLine)
+	}
+
+	return cleaned
 }

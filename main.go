@@ -116,18 +116,26 @@ func main() {
 
 	// Print session list
 	if *showStart {
-		fmt.Printf("%-5s %-10s %-15s %-20s %-20s %-30s %-12s\n", "IDX", "AGENT", "SIZE", "START TIME", "LAST UPDATED", "PROJECT", "ID")
-		fmt.Println(strings.Repeat("-", 140))
+		fmt.Printf("%-5s %-10s %-15s %-20s %-20s %-25s %-30s %-12s\n", "IDX", "AGENT", "SIZE", "START TIME", "LAST UPDATED", "PROJECT", "TITLE", "ID")
+		fmt.Println(strings.Repeat("-", 170))
 	} else {
-		fmt.Printf("%-5s %-10s %-15s %-20s %-30s %-12s\n", "IDX", "AGENT", "SIZE", "LAST UPDATED", "PROJECT", "ID")
-		fmt.Println(strings.Repeat("-", 120))
+		fmt.Printf("%-5s %-10s %-15s %-20s %-25s %-30s %-12s\n", "IDX", "AGENT", "SIZE", "LAST UPDATED", "PROJECT", "TITLE", "ID")
+		fmt.Println(strings.Repeat("-", 145))
 	}
 	for i, s := range sessions {
 		sizeStr := formatSize(s.Size)
+		projectStr := s.Project
+		if len(projectStr) > 25 {
+			projectStr = projectStr[:22] + "..."
+		}
+		titleStr := s.Title
+		if len(titleStr) > 30 {
+			titleStr = titleStr[:27] + "..."
+		}
 		if *showStart {
-			fmt.Printf("[%d] %-10s %-15s %-20s %-20s %-30s %.12s\n", i, s.Agent, sizeStr, s.StartTime.Format("2006-01-02 15:04"), s.LastTime.Format("2006-01-02 15:04"), s.Project, s.ID)
+			fmt.Printf("[%d] %-10s %-15s %-20s %-20s %-25s %-30s %.12s\n", i, s.Agent, sizeStr, s.StartTime.Format("2006-01-02 15:04"), s.LastTime.Format("2006-01-02 15:04"), projectStr, titleStr, s.ID)
 		} else {
-			fmt.Printf("[%d] %-10s %-15s %-20s %-30s %.12s\n", i, s.Agent, sizeStr, s.LastTime.Format("2006-01-02 15:04"), s.Project, s.ID)
+			fmt.Printf("[%d] %-10s %-15s %-20s %-25s %-30s %.12s\n", i, s.Agent, sizeStr, s.LastTime.Format("2006-01-02 15:04"), projectStr, titleStr, s.ID)
 		}
 	}
 	fmt.Println("\nTo view a session: acv <index> [user|assistant]")

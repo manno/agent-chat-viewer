@@ -92,15 +92,15 @@ var (
 				PaddingLeft(1).PaddingRight(1)
 
 	memTypeStyles = map[string]lipgloss.Style{
-		"user":      lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true),
-		"feedback":  lipgloss.NewStyle().Foreground(lipgloss.Color("221")).Bold(true),
-		"project":   lipgloss.NewStyle().Foreground(lipgloss.Color("119")).Bold(true),
-		"reference": lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true),
+		"user":      lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "81", Light: "25"}).Bold(true),
+		"feedback":  lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "221", Light: "130"}).Bold(true),
+		"project":   lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "119", Light: "28"}).Bold(true),
+		"reference": lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "51", Light: "31"}).Bold(true),
 	}
 
 	kindStyles = map[string]lipgloss.Style{
-		"tool-result": lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true),
-		"gemini-log":  lipgloss.NewStyle().Foreground(lipgloss.Color("177")).Bold(true),
+		"tool-result": lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "214", Light: "130"}).Bold(true),
+		"gemini-log":  lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "177", Light: "97"}).Bold(true),
 	}
 
 	agentAdaptiveColors = map[string]lipgloss.AdaptiveColor{
@@ -154,9 +154,9 @@ func relTimeColored(t time.Time) string {
 	d := time.Since(t)
 	switch {
 	case d < time.Hour:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("119")).Render(s)
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "119", Light: "28"}).Render(s)
 	case d < 24*time.Hour:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("221")).Render(s)
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "221", Light: "130"}).Render(s)
 	default:
 		return dimStyle.Render(s)
 	}
@@ -924,9 +924,15 @@ func (m tuiModel) detailView() string {
 	if m.roleFilter != "" {
 		roleTag = "  [" + strings.ToUpper(m.roleFilter) + " only]"
 	}
-	titleContent := fmt.Sprintf("  %s  %s  %s%s",
+	titleStr := s.Title
+	maxTitleLen := m.width - 45
+	if maxTitleLen > 10 {
+		titleStr = truncate(titleStr, maxTitleLen)
+	}
+	titleContent := fmt.Sprintf("  %s  %s  %s  %s%s",
 		agentColored(s.Agent),
 		s.Project,
+		lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("81")).Render(titleStr),
 		dimStyle.Render(s.LastTime.Format("2006-01-02 15:04")),
 		dimStyle.Render(roleTag),
 	)
@@ -1026,25 +1032,36 @@ func (m tuiModel) artifactDetailView() string {
 // ── table helpers ─────────────────────────────────────────────────────────────
 
 func (m *tuiModel) rebuildTable() {
-	projectW := max(12, min(45, m.width-8-9-17-12-8))
+	remaining := m.width - 60
+	var projectW, titleW int
+	if remaining < 22 {
+		projectW = 12
+		titleW = 10
+	} else {
+		projectW = max(12, min(30, remaining*4/10))
+		titleW = remaining - projectW
+	}
+
 	cols := []table.Column{
 		{Title: "AGENT", Width: 8},
 		{Title: "SIZE", Width: 9},
 		{Title: "UPDATED", Width: 17},
 		{Title: "PROJECT", Width: projectW},
+		{Title: "TITLE", Width: titleW},
 		{Title: "ID", Width: 12},
 	}
 	rows := make([]table.Row, len(m.sessions))
 	for i, s := range m.sessions {
 		project := truncate(s.Project, projectW)
+		title := truncate(s.Title, titleW)
 		id := truncate(s.ID, 12)
-		rows[i] = table.Row{s.Agent, formatSize(s.Size), s.LastTime.Format("2006-01-02 15:04"), project, id}
+		rows[i] = table.Row{s.Agent, formatSize(s.Size), s.LastTime.Format("2006-01-02 15:04"), project, title, id}
 	}
-	m.table = buildStyledTable(cols, rows, m.tableHeight())
+	m.table = buildStyledTable(cols, rows, m.tableHeight(), m.width-2)
 }
 
 func (m *tuiModel) buildSearchTable() {
-	previewW := max(20, m.width-8-20-8)
+	previewW := max(20, m.width-36)
 	cols := []table.Column{
 		{Title: "AGENT", Width: 8},
 		{Title: "PROJECT", Width: 20},
@@ -1058,11 +1075,11 @@ func (m *tuiModel) buildSearchTable() {
 			truncate(h.snippet, previewW),
 		}
 	}
-	m.table = buildStyledTable(cols, rows, m.tableHeight())
+	m.table = buildStyledTable(cols, rows, m.tableHeight(), m.width-2)
 }
 
 func (m *tuiModel) rebuildMemoriesTable() {
-	descW := max(20, min(55, m.width-12-15-18-12-8))
+	descW := max(20, m.width-67)
 	cols := []table.Column{
 		{Title: "TYPE", Width: 12},
 		{Title: "PROJECT", Width: 15},
@@ -1080,11 +1097,11 @@ func (m *tuiModel) rebuildMemoriesTable() {
 			relTimeColored(mem.ModTime),
 		}
 	}
-	m.table = buildStyledTable(cols, rows, m.tableHeight())
+	m.table = buildStyledTable(cols, rows, m.tableHeight(), m.width-2)
 }
 
 func (m *tuiModel) rebuildArtifactsTable() {
-	nameW := max(10, min(25, m.width-8-15-14-12-9-10-8))
+	nameW := max(10, m.width-84)
 	cols := []table.Column{
 		{Title: "AGENT", Width: 8},
 		{Title: "PROJECT", Width: 15},
@@ -1110,15 +1127,16 @@ func (m *tuiModel) rebuildArtifactsTable() {
 			relTimeColored(a.ModTime),
 		}
 	}
-	m.table = buildStyledTable(cols, rows, m.tableHeight())
+	m.table = buildStyledTable(cols, rows, m.tableHeight(), m.width-2)
 }
 
-func buildStyledTable(cols []table.Column, rows []table.Row, height int) table.Model {
+func buildStyledTable(cols []table.Column, rows []table.Row, height int, width int) table.Model {
 	t := table.New(
 		table.WithColumns(cols),
 		table.WithRows(rows),
 		table.WithFocused(true),
 		table.WithHeight(height),
+		table.WithWidth(width),
 	)
 	s := table.DefaultStyles()
 	s.Header = s.Header.
@@ -1128,8 +1146,8 @@ func buildStyledTable(cols []table.Column, rows []table.Row, height int) table.M
 		Bold(true).
 		Foreground(lipgloss.AdaptiveColor{Dark: "255", Light: "232"})
 	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
+		Foreground(lipgloss.AdaptiveColor{Dark: "229", Light: "235"}).
+		Background(lipgloss.AdaptiveColor{Dark: "57", Light: "189"}).
 		Bold(false)
 	s.Cell = s.Cell.Foreground(lipgloss.AdaptiveColor{Dark: "252", Light: "237"})
 	t.SetStyles(s)
@@ -1274,7 +1292,8 @@ func filterSessions(sessions []Session, query string) []Session {
 	var out []Session
 	for _, s := range sessions {
 		if strings.Contains(strings.ToLower(s.Project), q) ||
-			strings.Contains(strings.ToLower(s.Agent), q) {
+			strings.Contains(strings.ToLower(s.Agent), q) ||
+			strings.Contains(strings.ToLower(s.Title), q) {
 			out = append(out, s)
 		}
 	}
@@ -1383,7 +1402,7 @@ func (m tuiModel) saveCurrentSession() (string, error) {
 	name := fmt.Sprintf("session-%s-%s-%s.md", s.Agent, project, ts)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# Session: %s / %s\n\n", s.Agent, s.Project))
+	sb.WriteString(fmt.Sprintf("# Session: %s / %s - %s\n\n", s.Agent, s.Project, s.Title))
 	sb.WriteString(fmt.Sprintf("- **Date:** %s\n", s.LastTime.Format("2006-01-02 15:04")))
 	sb.WriteString(fmt.Sprintf("- **ID:** %s\n", s.ID))
 	sb.WriteString(fmt.Sprintf("- **Messages:** %d\n\n", len(s.Messages)))

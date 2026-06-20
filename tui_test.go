@@ -11,9 +11,9 @@ import (
 
 func makeSessions() []Session {
 	return []Session{
-		{Agent: "claude", Project: "my-project", Messages: []Message{{Role: "user", Content: "hello from claude"}}},
-		{Agent: "gemini", Project: "other-project", Messages: []Message{{Role: "user", Content: "hello from gemini"}}},
-		{Agent: "copilot", Project: "my-project", Messages: []Message{{Role: "assistant", Content: "copilot reply"}}},
+		{Agent: "claude", Project: "my-project", Title: "fix code layout", Messages: []Message{{Role: "user", Content: "hello from claude"}}},
+		{Agent: "gemini", Project: "other-project", Title: "write tests", Messages: []Message{{Role: "user", Content: "hello from gemini"}}},
+		{Agent: "copilot", Project: "my-project", Title: "implement chat feature", Messages: []Message{{Role: "assistant", Content: "copilot reply"}}},
 	}
 }
 
@@ -30,6 +30,14 @@ func TestFilterSessions_ByAgent(t *testing.T) {
 	got := filterSessions(sessions, "claude")
 	if len(got) != 1 || got[0].Agent != "claude" {
 		t.Errorf("expected 1 claude session, got %v", got)
+	}
+}
+
+func TestFilterSessions_ByTitle(t *testing.T) {
+	sessions := makeSessions()
+	got := filterSessions(sessions, "layout")
+	if len(got) != 1 || got[0].Title != "fix code layout" {
+		t.Errorf("expected 1 session matching layout title, got %v", got)
 	}
 }
 

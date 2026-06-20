@@ -432,13 +432,23 @@ func (m *Model) renderRow(r int) string {
 			continue
 		}
 		style := lipgloss.NewStyle().Width(m.cols[i].Width).MaxWidth(m.cols[i].Width).Inline(true)
-		renderedCell := m.styles.Cell.Render(style.Render(runewidth.Truncate(value, m.cols[i].Width, "…")))
+		var renderedCell string
+		if r == m.cursor {
+			cellStyle := m.styles.Selected.Copy().Padding(0, 1)
+			renderedCell = cellStyle.Render(style.Render(runewidth.Truncate(value, m.cols[i].Width, "…")))
+		} else {
+			renderedCell = m.styles.Cell.Render(style.Render(runewidth.Truncate(value, m.cols[i].Width, "…")))
+		}
 		s = append(s, renderedCell)
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, s...)
 
 	if r == m.cursor {
+		if m.viewport.Width > 0 {
+			rowStyle := m.styles.Selected.Copy().Padding(0, 0)
+			return rowStyle.Width(m.viewport.Width).Render(row)
+		}
 		return m.styles.Selected.Render(row)
 	}
 

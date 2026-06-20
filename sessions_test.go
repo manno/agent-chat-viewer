@@ -248,3 +248,75 @@ func TestFindAndSortSessions_OrderedByLastTime(t *testing.T) {
 		t.Errorf("last element should be oldest, got %v", sorted[2].LastTime)
 	}
 }
+
+func TestExtractTitle(t *testing.T) {
+	cases := []struct {
+		name     string
+		messages []Message
+		want     string
+	}{
+		{
+			name:     "Empty",
+			messages: nil,
+			want:     "Empty Session",
+		},
+		{
+			name: "Simple User Msg",
+			messages: []Message{
+				{Role: "user", Content: "Hello world!"},
+			},
+			want: "Hello world!",
+		},
+		{
+			name: "Markdown Header",
+			messages: []Message{
+				{Role: "user", Content: "###  My Important Topic"},
+			},
+			want: "My Important Topic",
+		},
+		{
+			name: "List Marker",
+			messages: []Message{
+				{Role: "user", Content: "- Fix the bug"},
+			},
+			want: "Fix the bug",
+		},
+		{
+			name: "Numeric List Marker",
+			messages: []Message{
+				{Role: "user", Content: "1. Write tests"},
+			},
+			want: "Write tests",
+		},
+		{
+			name: "Multi-line First Line Empty",
+			messages: []Message{
+				{Role: "user", Content: "\n  \nFirst non-empty line\nSecond line"},
+			},
+			want: "First non-empty line",
+		},
+		{
+			name: "Code Block Fence",
+			messages: []Message{
+				{Role: "user", Content: "```go\npackage main\n"},
+			},
+			want: "package main",
+		},
+		{
+			name: "No User Message Fallback",
+			messages: []Message{
+				{Role: "assistant", Content: "How can I help you?"},
+			},
+			want: "How can I help you?",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := extractTitle(c.messages)
+			if got != c.want {
+				t.Errorf("extractTitle() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
