@@ -62,6 +62,26 @@ acv 0 assistant
 acv -f "*FreeCAD*"
 ```
 
+## Agent Skills
+
+The `skills/` directory contains reusable agent skill definitions (e.g. for GitHub Copilot CLI).
+
+**Install a skill:**
+
+```bash
+# 1. Copy the skill folder into the canonical store
+cp -r skills/search-prior-sessions ~/.config/agent-skills/
+
+# 2. Sync it into each agent's skill directory (creates symlinks)
+acv -sync-skills
+```
+
+`acv -sync-skills` moves any per-agent skill directories into `~/.config/agent-skills/`
+and symlinks them back so all agents share the same canonical copy. You can also
+run the sync interactively from the `acv` TUI (Skills tab → `s`).
+
+- **[search-prior-sessions](skills/search-prior-sessions/SKILL.md)** — skill that teaches agents to use `acv` for recalling prior work across Copilot, Claude, Gemini, and agy sessions.
+
 ## License
 
 MIT

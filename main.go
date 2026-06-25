@@ -22,18 +22,19 @@ func isTerminal(f *os.File) bool {
 }
 
 func main() {
-	showStart   := flag.Bool("s", false, "Show start time in listing")
-	searchQuery := flag.String("f", "", "Search for pattern in all sessions (supports * and ?)")
-	noTUI       := flag.Bool("no-tui", false, "Disable TUI, use plain CLI output")
-	showMem     := flag.Bool("memories", false, "List agent memory files")
-	showFiles   := flag.Bool("files", false, "List agent artifact files (tool-results, logs)")
-	agentFilter := flag.String("agent", "", "Filter by agent name (claude/gemini/copilot/agy)")
-	projFilter  := flag.String("project", "", "Filter by project name (substring match)")
-	regexFlag   := flag.Bool("regex", false, "Treat -f pattern as a full regex (default: literal + * ? wildcards)")
-	sinceFlag   := flag.String("since", "", "Only sessions updated since (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
-	untilFlag   := flag.String("until", "", "Only sessions updated before (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
-	limitFlag   := flag.Int("limit", 0, "Stop after N search matches (0 = unlimited)")
-	jsonFlag    := flag.Bool("json", false, "Emit one JSON object per search hit (no banners)")
+	showStart    := flag.Bool("s", false, "Show start time in listing")
+	searchQuery  := flag.String("f", "", "Search for pattern in all sessions (supports * and ?)")
+	noTUI        := flag.Bool("no-tui", false, "Disable TUI, use plain CLI output")
+	showMem      := flag.Bool("memories", false, "List agent memory files")
+	showFiles    := flag.Bool("files", false, "List agent artifact files (tool-results, logs)")
+	syncSkillsF  := flag.Bool("sync-skills", false, "Sync skills from canonical dir to per-agent dirs")
+	agentFilter  := flag.String("agent", "", "Filter by agent name (claude/gemini/copilot/agy)")
+	projFilter   := flag.String("project", "", "Filter by project name (substring match)")
+	regexFlag    := flag.Bool("regex", false, "Treat -f pattern as a full regex (default: literal + * ? wildcards)")
+	sinceFlag    := flag.String("since", "", "Only sessions updated since (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
+	untilFlag    := flag.String("until", "", "Only sessions updated before (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
+	limitFlag    := flag.Int("limit", 0, "Stop after N search matches (0 = unlimited)")
+	jsonFlag     := flag.Bool("json", false, "Emit one JSON object per search hit (no banners)")
 	flag.Parse()
 
 	// -json and non-TTY stdout both imply -no-tui.
@@ -42,7 +43,7 @@ func main() {
 	}
 
 	// Default: launch TUI when no arguments are given
-	cliMode := *noTUI || *showMem || *showFiles || *searchQuery != "" ||
+	cliMode := *noTUI || *showMem || *showFiles || *syncSkillsF || *searchQuery != "" ||
 		flag.NArg() > 0 || *agentFilter != "" || *projFilter != ""
 	if !cliMode {
 		p := tea.NewProgram(newTUI(), tea.WithAltScreen())
@@ -67,6 +68,27 @@ func main() {
 
 	if *showFiles {
 		printArtifacts(findArtifacts(home), *agentFilter, *projFilter)
+		return
+	}
+
+	if *syncSkillsF {
+		report := syncSkills(defaultSkillDirs(home))
+		for _, s := range report.Moved {
+			fmt.Println("moved  ", s)
+		}
+		for _, s := range report.Linked {
+			fmt.Println("linked ", s)
+		}
+		for _, s := range report.Skipped {
+			fmt.Println("skip   ", s)
+		}
+		for _, c := range report.Conflicts {
+			fmt.Printf("conflict %s:%s — resolve manually or open acv TUI\n", c.Agent, c.Name)
+		}
+		for _, e := range report.Errors {
+			fmt.Fprintln(os.Stderr, "error  ", e)
+		}
+		fmt.Println(report.Summary())
 		return
 	}
 
@@ -181,6 +203,7 @@ func main() {
 	fmt.Println("To show start times: acv -s")
 	fmt.Println("To list memories:   acv -memories [-project NAME]")
 	fmt.Println("To list artifacts:  acv -files [-agent NAME] [-project NAME]")
+	fmt.Println("To sync skills:     acv -sync-skills")
 }
 
 func filterSessionsCLI(sessions []Session, agent, project string) []Session {
