@@ -68,6 +68,15 @@ func findSkillsIn(dirs SkillDirs) []Skill {
 	} {
 		out = append(out, scanSkillDir(d.agent, d.path, dirs.Canonical)...)
 	}
+	// Deduplicate: synced agent entries are symlinks into canonical, so they
+	// are already represented by the canonical entry. Drop them.
+	filtered := out[:0]
+	for _, s := range out {
+		if !s.Synced {
+			filtered = append(filtered, s)
+		}
+	}
+	out = filtered
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name != out[j].Name {
 			return out[i].Name < out[j].Name

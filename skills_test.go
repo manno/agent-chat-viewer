@@ -211,3 +211,38 @@ func TestResolveSkillConflict_UseLocal(t *testing.T) {
 		t.Errorf("expected exactly 1 backup of old canonical, got %v", matches)
 	}
 }
+
+func TestFindSkillsIn_DeduplicatesSyncedEntries(t *testing.T) {
+	dirs := newSkillDirs(t)
+	for _, d := range []string{dirs.Copilot, dirs.Claude} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSkill(t, dirs.Copilot, "alpha", "---\nname: alpha\n---\nA")
+	writeSkill(t, dirs.Claude, "beta", "---\nname: beta\n---\nB")
+
+	// Sync creates canonical copies and symlinks in agent dirs.
+	r := syncSkills(dirs)
+	if len(r.Errors) > 0 {
+		t.Fatalf("sync errors: %v", r.Errors)
+	}
+
+	skills := findSkillsIn(dirs)
+
+	// After full sync: canonical has alpha + beta, each agent dir has synced
+	// symlinks. findSkillsIn should return only 2 entries (the canonical ones),
+	// not 6 (2 canonical + 2 copilot synced + 2 claude synced).
+	if len(skills) != 2 {
+		names := make([]string, len(skills))
+		for i, s := range skills {
+			names[i] = s.Agent + "/" + s.Name
+		}
+		t.Fatalf("want 2 skills (canonical only), got %d: %v", len(skills), names)
+	}
+	for _, s := range skills {
+		if s.Agent != "canonical" {
+			t.Errorf("expected canonical agent, got %q for skill %q", s.Agent, s.Name)
+		}
+	}
+}
