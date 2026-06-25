@@ -1452,7 +1452,7 @@ func (m *tuiModel) rebuildArtifactsTable() {
 }
 
 func (m *tuiModel) rebuildSkillsTable() {
-	descW := max(20, m.width-58)
+	descW := max(20, m.width-62)
 	cols := []table.Column{
 		{Title: "AGENT", Width: 10},
 		{Title: "LINK", Width: 8},
