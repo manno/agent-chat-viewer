@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -111,37 +112,102 @@ func TestSyncSkills_InitialMigrationCreatesSymlinks(t *testing.T) {
 	}
 }
 
-func TestSyncSkills_NameCollisionIsSkipped(t *testing.T) {
+func TestSyncSkills_NameCollisionSurfacesAsConflict(t *testing.T) {
 	dirs := newSkillDirs(t)
 	for _, d := range []string{dirs.Copilot, dirs.Claude, dirs.Canonical} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// canonical already has "shared"
-	writeSkill(t, dirs.Canonical, "shared", "---\nname: shared-canonical\n---\nC")
-	// copilot has its own different "shared" — must NOT be overwritten.
-	writeSkill(t, dirs.Copilot, "shared", "---\nname: shared-copilot\n---\nLOCAL")
+	writeSkill(t, dirs.Canonical, "shared", "---\nname: shared\n---\nCANON BODY\n")
+	writeSkill(t, dirs.Copilot, "shared", "---\nname: shared\n---\nLOCAL BODY\n")
 
 	r := syncSkills(dirs)
 
-	// canonical SKILL.md must still be the original.
-	body, _ := os.ReadFile(filepath.Join(dirs.Canonical, "shared", "SKILL.md"))
-	if string(body) != "---\nname: shared-canonical\n---\nC" {
-		t.Errorf("canonical SKILL.md was overwritten: %q", body)
+	if len(r.Conflicts) != 1 {
+		t.Fatalf("want 1 conflict, got %d (skipped=%v)", len(r.Conflicts), r.Skipped)
+	}
+	c := r.Conflicts[0]
+	if c.Name != "shared" || c.Agent != "copilot" {
+		t.Errorf("unexpected conflict: %+v", c)
+	}
+	if c.DiffText == "" || !strings.Contains(c.DiffText, "CANON BODY") || !strings.Contains(c.DiffText, "LOCAL BODY") {
+		t.Errorf("diff text missing or incomplete:\n%s", c.DiffText)
 	}
 
-	// copilot dir must still be a real (non-symlink) dir.
+	// Nothing should have been moved or overwritten yet.
+	body, _ := os.ReadFile(filepath.Join(dirs.Canonical, "shared", "SKILL.md"))
+	if !strings.Contains(string(body), "CANON BODY") {
+		t.Errorf("canonical mutated unexpectedly: %q", body)
+	}
+	info, _ := os.Lstat(filepath.Join(dirs.Copilot, "shared"))
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("copilot dir should still be a real dir before resolution")
+	}
+}
+
+func TestResolveSkillConflict_KeepCanonical(t *testing.T) {
+	dirs := newSkillDirs(t)
+	_ = os.MkdirAll(dirs.Copilot, 0o755)
+	_ = os.MkdirAll(dirs.Canonical, 0o755)
+	writeSkill(t, dirs.Canonical, "shared", "---\nname: shared\n---\nCANON\n")
+	writeSkill(t, dirs.Copilot, "shared", "---\nname: shared\n---\nLOCAL\n")
+
+	r := syncSkills(dirs)
+	if len(r.Conflicts) != 1 {
+		t.Fatalf("want 1 conflict, got %d", len(r.Conflicts))
+	}
+	if err := resolveSkillConflict(r.Conflicts[0], ActionKeepCanonical); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	// copilot/shared should now be a symlink to canonical.
 	info, err := os.Lstat(filepath.Join(dirs.Copilot, "shared"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		t.Errorf("colliding copilot dir should be left intact")
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("copilot/shared should be symlink after KeepCanonical")
+	}
+	body, _ := os.ReadFile(filepath.Join(dirs.Copilot, "shared", "SKILL.md"))
+	if !strings.Contains(string(body), "CANON") {
+		t.Errorf("symlinked content should reflect canonical, got %q", body)
+	}
+	// And a backup of the old local dir must exist.
+	matches, _ := filepath.Glob(filepath.Join(dirs.Copilot, "shared.conflict-*"))
+	if len(matches) != 1 {
+		t.Errorf("expected exactly 1 backup of local copy, got %v", matches)
+	}
+}
+
+func TestResolveSkillConflict_UseLocal(t *testing.T) {
+	dirs := newSkillDirs(t)
+	_ = os.MkdirAll(dirs.Copilot, 0o755)
+	_ = os.MkdirAll(dirs.Canonical, 0o755)
+	writeSkill(t, dirs.Canonical, "shared", "---\nname: shared\n---\nCANON\n")
+	writeSkill(t, dirs.Copilot, "shared", "---\nname: shared\n---\nLOCAL\n")
+
+	r := syncSkills(dirs)
+	if err := resolveSkillConflict(r.Conflicts[0], ActionUseLocal); err != nil {
+		t.Fatalf("resolve: %v", err)
 	}
 
-	// Should appear in Skipped report.
-	if len(r.Skipped) == 0 {
-		t.Errorf("expected at least one skipped entry, got none")
+	// canonical/shared should now contain the local body.
+	body, _ := os.ReadFile(filepath.Join(dirs.Canonical, "shared", "SKILL.md"))
+	if !strings.Contains(string(body), "LOCAL") {
+		t.Errorf("canonical/shared should hold local body, got %q", body)
+	}
+	// copilot/shared is now a symlink → canonical (which holds local body).
+	info, err := os.Lstat(filepath.Join(dirs.Copilot, "shared"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("copilot/shared should be symlink after UseLocal")
+	}
+	// Backup of the old canonical body should exist.
+	matches, _ := filepath.Glob(filepath.Join(dirs.Canonical, "shared.conflict-*"))
+	if len(matches) != 1 {
+		t.Errorf("expected exactly 1 backup of old canonical, got %v", matches)
 	}
 }

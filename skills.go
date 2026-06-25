@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -188,15 +189,27 @@ func parseSkillFrontmatter(s *Skill) {
 
 // SyncReport summarises one sync run for display in the TUI.
 type SyncReport struct {
-	Moved   []string // "agent:name → canonical"
-	Linked  []string // "agent:name (link)"
-	Skipped []string // "agent:name: reason"
-	Errors  []string
+	Moved     []string        // "agent:name → canonical"
+	Linked    []string        // "agent:name (link)"
+	Skipped   []string        // "agent:name: reason"
+	Errors    []string
+	Conflicts []SkillConflict // real-dir name collisions awaiting user decision
 }
 
 func (r SyncReport) Summary() string {
-	return fmt.Sprintf("synced: moved %d · linked %d · skipped %d · errors %d",
-		len(r.Moved), len(r.Linked), len(r.Skipped), len(r.Errors))
+	return fmt.Sprintf("synced: moved %d · linked %d · skipped %d · conflicts %d · errors %d",
+		len(r.Moved), len(r.Linked), len(r.Skipped), len(r.Conflicts), len(r.Errors))
+}
+
+// SkillConflict describes a name collision discovered during sync, where the
+// agent dir has a real (non-symlink) skill directory under the same name as
+// one already present in canonical. The user must choose which side wins.
+type SkillConflict struct {
+	Name     string // skill directory name
+	Agent    string // "copilot" | "claude"
+	AgentDir string // absolute path to the agent-local copy
+	CanonDir string // absolute path to the canonical copy
+	DiffText string // precomputed unified diff of SKILL.md, "" if identical
 }
 
 // syncSkills consolidates per-agent skill directories under canonical and
@@ -277,7 +290,15 @@ func syncSkills(dirs SkillDirs) SyncReport {
 			}
 
 			if _, err := os.Stat(canonDest); err == nil {
-				r.Skipped = append(r.Skipped, fmt.Sprintf("%s:%s: canonical already has this skill (resolve manually)", ad.agent, e.Name()))
+				agentAbs, _ := filepath.Abs(src)
+				conflict := SkillConflict{
+					Name:     e.Name(),
+					Agent:    ad.agent,
+					AgentDir: agentAbs,
+					CanonDir: canonDest,
+					DiffText: diffSkillFiles(canonDest, agentAbs),
+				}
+				r.Conflicts = append(r.Conflicts, conflict)
 				continue
 			}
 			if err := os.Rename(src, canonDest); err != nil {
@@ -359,4 +380,85 @@ func filterSkills(skills []Skill, query string) []Skill {
 		}
 	}
 	return out
+}
+
+// ── conflict diff & resolution ───────────────────────────────────────────────
+
+// diffSkillFiles returns a unified diff (via /usr/bin/diff -u) of the SKILL.md
+// files in two skill directories. Returns "" if the files are byte-identical
+// or if the diff command is unavailable.
+func diffSkillFiles(canonDir, agentDir string) string {
+	a := filepath.Join(canonDir, "SKILL.md")
+	b := filepath.Join(agentDir, "SKILL.md")
+
+	aBytes, errA := os.ReadFile(a)
+	bBytes, errB := os.ReadFile(b)
+	if errA == nil && errB == nil && string(aBytes) == string(bBytes) {
+		return ""
+	}
+
+	cmd := exec.Command("diff", "-u",
+		"--label", "canonical/SKILL.md",
+		"--label", "local/SKILL.md",
+		a, b,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// diff exits 1 when files differ — that's expected and out is still valid.
+		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() > 1 {
+			return fmt.Sprintf("(diff unavailable: %v)\n--- canonical ---\n%s\n--- local ---\n%s",
+				err, string(aBytes), string(bBytes))
+		}
+	}
+	return string(out)
+}
+
+// ConflictAction is the user's choice for a single skill conflict.
+type ConflictAction string
+
+const (
+	ActionKeepCanonical ConflictAction = "canonical"
+	ActionUseLocal      ConflictAction = "local"
+	ActionSkip          ConflictAction = "skip"
+)
+
+// resolveSkillConflict applies action to c. With ActionKeepCanonical the
+// agent's local copy is renamed aside (to <name>.conflict-<ts>) and replaced
+// with a symlink to canonical. With ActionUseLocal the canonical copy is
+// renamed aside, the local dir is moved into canonical, and a symlink is
+// created in the agent dir. ActionSkip is a no-op.
+func resolveSkillConflict(c SkillConflict, action ConflictAction) error {
+	switch action {
+	case ActionSkip:
+		return nil
+
+	case ActionKeepCanonical:
+		backup := c.AgentDir + ".conflict-" + time.Now().Format("20060102-150405")
+		if err := os.Rename(c.AgentDir, backup); err != nil {
+			return fmt.Errorf("backup local: %w", err)
+		}
+		if err := os.Symlink(c.CanonDir, c.AgentDir); err != nil {
+			// try to restore
+			_ = os.Rename(backup, c.AgentDir)
+			return fmt.Errorf("symlink to canonical: %w", err)
+		}
+		return nil
+
+	case ActionUseLocal:
+		backup := c.CanonDir + ".conflict-" + time.Now().Format("20060102-150405")
+		if err := os.Rename(c.CanonDir, backup); err != nil {
+			return fmt.Errorf("backup canonical: %w", err)
+		}
+		if err := os.Rename(c.AgentDir, c.CanonDir); err != nil {
+			_ = os.Rename(backup, c.CanonDir)
+			return fmt.Errorf("move local into canonical: %w", err)
+		}
+		if err := os.Symlink(c.CanonDir, c.AgentDir); err != nil {
+			return fmt.Errorf("symlink agent dir: %w", err)
+		}
+		return nil
+
+	default:
+		return fmt.Errorf("unknown action %q", action)
+	}
 }

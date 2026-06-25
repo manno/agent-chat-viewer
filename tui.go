@@ -30,6 +30,7 @@ const (
 	viewArtifactDetail
 	viewSkills
 	viewSkillDetail
+	viewSkillConflict
 )
 
 type listMode int
@@ -206,6 +207,11 @@ type tuiModel struct {
 	filtSkills    []Skill
 	selectedSkill *Skill
 
+	// skill conflicts (queued by `y` sync)
+	conflicts        []SkillConflict
+	conflictIdx      int
+	conflictMsg      string
+
 	width  int
 	height int
 
@@ -300,6 +306,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.Width = m.width
 			m.viewport.Height = m.vpHeight()
 			m.viewport.SetContent(m.renderSkill())
+		case viewSkillConflict:
+			m.viewport.Width = m.width
+			m.viewport.Height = m.vpHeight()
+			m.viewport.SetContent(m.renderConflictDiff())
 		}
 		return m, nil
 
@@ -371,6 +381,8 @@ func (m tuiModel) View() string {
 		return m.skillsView()
 	case viewSkillDetail:
 		return m.skillDetailView()
+	case viewSkillConflict:
+		return m.skillConflictView()
 	}
 	return ""
 }
@@ -395,6 +407,8 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSkillsKey(msg)
 	case viewSkillDetail:
 		return m.handleSkillDetailKey(msg)
+	case viewSkillConflict:
+		return m.handleSkillConflictKey(msg)
 	}
 	return m, nil
 }
@@ -868,6 +882,13 @@ func (m tuiModel) handleSkillsTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		home, _ := os.UserHomeDir()
 		report := syncSkills(defaultSkillDirs(home))
 		m.saveStatus = report.Summary()
+		if len(report.Conflicts) > 0 {
+			m.conflicts = report.Conflicts
+			m.conflictIdx = 0
+			m.conflictMsg = ""
+			m.openConflictView()
+			return m, nil
+		}
 		m.skillsLoaded = false
 		return m, loadSkillsCmd()
 
@@ -905,6 +926,80 @@ func (m tuiModel) handleSkillDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 	}
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	return m, cmd
+}
+
+// ── skill conflict resolution ────────────────────────────────────────────────
+
+func (m *tuiModel) openConflictView() {
+	m.view = viewSkillConflict
+	m.viewport = viewport.New(m.width, m.vpHeight())
+	m.viewport.SetContent(m.renderConflictDiff())
+}
+
+func (m *tuiModel) advanceConflict() (tea.Model, tea.Cmd) {
+	m.conflictIdx++
+	if m.conflictIdx >= len(m.conflicts) {
+		// done — return to skills list and reload.
+		m.conflicts = nil
+		m.conflictIdx = 0
+		m.view = viewSkills
+		m.skillsLoaded = false
+		return *m, loadSkillsCmd()
+	}
+	m.viewport = viewport.New(m.width, m.vpHeight())
+	m.viewport.SetContent(m.renderConflictDiff())
+	return *m, nil
+}
+
+func (m tuiModel) handleSkillConflictKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.conflictIdx >= len(m.conflicts) {
+		// safety: nothing left, bail back to skills.
+		m.view = viewSkills
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "q", "esc":
+		m.conflicts = nil
+		m.conflictIdx = 0
+		m.view = viewSkills
+		m.skillsLoaded = false
+		return m, loadSkillsCmd()
+
+	case "c":
+		c := m.conflicts[m.conflictIdx]
+		if err := resolveSkillConflict(c, ActionKeepCanonical); err != nil {
+			m.conflictMsg = "error: " + err.Error()
+			return m, nil
+		}
+		m.conflictMsg = fmt.Sprintf("kept canonical for %s:%s", c.Agent, c.Name)
+		return m.advanceConflict()
+
+	case "l":
+		c := m.conflicts[m.conflictIdx]
+		if err := resolveSkillConflict(c, ActionUseLocal); err != nil {
+			m.conflictMsg = "error: " + err.Error()
+			return m, nil
+		}
+		m.conflictMsg = fmt.Sprintf("used local for %s:%s", c.Agent, c.Name)
+		return m.advanceConflict()
+
+	case "s":
+		c := m.conflicts[m.conflictIdx]
+		m.conflictMsg = fmt.Sprintf("skipped %s:%s", c.Agent, c.Name)
+		return m.advanceConflict()
+
+	case "g":
+		m.viewport.GotoTop()
+		return m, nil
+	case "G":
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	return m, cmd
@@ -1220,6 +1315,34 @@ func (m tuiModel) skillDetailView() string {
 	vpView := m.viewport.View()
 	pct := fmt.Sprintf("%3.f%%", m.viewport.ScrollPercent()*100)
 	helpLeft := " ↑↓/jk: scroll  PgUp/PgDn: page  g/G: top/bottom  q: back"
+	helpRight := pct + "  "
+	help := statusBarStyle.Width(m.width).Render(
+		helpLeft + strings.Repeat(" ", max(1, m.width-len(helpLeft)-len(helpRight))) + helpRight,
+	)
+	return lipgloss.JoinVertical(lipgloss.Left, tabBar, titleBar, meta, vpView, help)
+}
+
+func (m tuiModel) skillConflictView() string {
+	tabBar := m.renderTabBar()
+	if m.conflictIdx >= len(m.conflicts) {
+		return tabBar
+	}
+	c := m.conflicts[m.conflictIdx]
+	titleBar := titleBarStyle.Width(m.width).Render(
+		fmt.Sprintf("  CONFLICT %d/%d  %s  %s",
+			m.conflictIdx+1, len(m.conflicts), agentColored(c.Agent), c.Name),
+	)
+	metaContent := fmt.Sprintf(" canonical: %s   local: %s",
+		dimStyle.Render(c.CanonDir), dimStyle.Render(c.AgentDir))
+	meta := detailMetaStyle.Width(m.width).Render(metaContent)
+
+	vpView := m.viewport.View()
+
+	pct := fmt.Sprintf("%3.f%%", m.viewport.ScrollPercent()*100)
+	helpLeft := " c: keep canonical  l: use local  s: skip  ↑↓/jk: scroll  q: cancel"
+	if m.conflictMsg != "" {
+		helpLeft = "  " + m.conflictMsg + "  ·  " + helpLeft
+	}
 	helpRight := pct + "  "
 	help := statusBarStyle.Width(m.width).Render(
 		helpLeft + strings.Repeat(" ", max(1, m.width-len(helpLeft)-len(helpRight))) + helpRight,
@@ -1552,6 +1675,43 @@ func (m tuiModel) renderSkill() string {
 		sb.WriteString("  " + line + "\n")
 	}
 	return sb.String()
+}
+
+func (m tuiModel) renderConflictDiff() string {
+	if m.conflictIdx >= len(m.conflicts) {
+		return ""
+	}
+	c := m.conflicts[m.conflictIdx]
+	contentW := m.width - 4
+	if contentW < 20 {
+		contentW = 20
+	}
+
+	var sb strings.Builder
+	if c.DiffText == "" {
+		sb.WriteString(dimStyle.Render("  SKILL.md files are identical — only a name collision.\n"))
+		sb.WriteString(dimStyle.Render("  Choose [c] keep canonical or [l] move local into canonical.\n"))
+		return sb.String()
+	}
+	for _, line := range strings.Split(c.DiffText, "\n") {
+		sb.WriteString("  " + colorizeDiffLine(line) + "\n")
+	}
+	return sb.String()
+}
+
+func colorizeDiffLine(line string) string {
+	switch {
+	case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Dark: "117", Light: "27"}).Render(line)
+	case strings.HasPrefix(line, "@@"):
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "213", Light: "92"}).Render(line)
+	case strings.HasPrefix(line, "+"):
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "120", Light: "28"}).Render(line)
+	case strings.HasPrefix(line, "-"):
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "203", Light: "124"}).Render(line)
+	default:
+		return line
+	}
 }
 
 // ── search & filter ───────────────────────────────────────────────────────────
