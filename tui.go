@@ -28,6 +28,8 @@ const (
 	viewMemoryDetail
 	viewArtifacts
 	viewArtifactDetail
+	viewSkills
+	viewSkillDetail
 )
 
 type listMode int
@@ -168,6 +170,7 @@ func relTimeColored(t time.Time) string {
 type sessionsLoadedMsg struct{ sessions []Session }
 type memoriesLoadedMsg struct{ memories []MemoryFile }
 type artifactsLoadedMsg struct{ artifacts []Artifact }
+type skillsLoadedMsg struct{ skills []Skill }
 
 type searchHit struct {
 	session *Session
@@ -196,6 +199,12 @@ type tuiModel struct {
 	artifactsLoaded  bool
 	filtArtifacts    []Artifact
 	selectedArtifact *Artifact
+
+	// skills
+	skills        []Skill
+	skillsLoaded  bool
+	filtSkills    []Skill
+	selectedSkill *Skill
 
 	width  int
 	height int
@@ -253,6 +262,13 @@ func loadArtifactsCmd() tea.Cmd {
 	}
 }
 
+func loadSkillsCmd() tea.Cmd {
+	return func() tea.Msg {
+		home, _ := os.UserHomeDir()
+		return skillsLoadedMsg{skills: findSkills(home)}
+	}
+}
+
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
@@ -278,6 +294,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.Width = m.width
 			m.viewport.Height = m.vpHeight()
 			m.viewport.SetContent(m.renderArtifact())
+		case viewSkills:
+			m.rebuildSkillsTable()
+		case viewSkillDetail:
+			m.viewport.Width = m.width
+			m.viewport.Height = m.vpHeight()
+			m.viewport.SetContent(m.renderSkill())
 		}
 		return m, nil
 
@@ -303,6 +325,15 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filtArtifacts = msg.artifacts
 		if m.view == viewArtifacts {
 			m.rebuildArtifactsTable()
+		}
+		return m, nil
+
+	case skillsLoadedMsg:
+		m.skills = msg.skills
+		m.skillsLoaded = true
+		m.filtSkills = msg.skills
+		if m.view == viewSkills {
+			m.rebuildSkillsTable()
 		}
 		return m, nil
 
@@ -336,6 +367,10 @@ func (m tuiModel) View() string {
 		return m.artifactsView()
 	case viewArtifactDetail:
 		return m.artifactDetailView()
+	case viewSkills:
+		return m.skillsView()
+	case viewSkillDetail:
+		return m.skillDetailView()
 	}
 	return ""
 }
@@ -356,6 +391,10 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleArtifactsKey(msg)
 	case viewArtifactDetail:
 		return m.handleArtifactDetailKey(msg)
+	case viewSkills:
+		return m.handleSkillsKey(msg)
+	case viewSkillDetail:
+		return m.handleSkillDetailKey(msg)
 	}
 	return m, nil
 }
@@ -402,6 +441,20 @@ func (m tuiModel) handleResourceKey(key string) (tuiModel, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		return m, loadArtifactsCmd(), true
+
+	case "4":
+		if m.view == viewSkills {
+			return m, nil, true
+		}
+		m.view = viewSkills
+		m.mode = modeNormal
+		m.textInput.SetValue("")
+		if m.skillsLoaded {
+			m.filtSkills = m.skills
+			m.rebuildSkillsTable()
+			return m, nil, true
+		}
+		return m, loadSkillsCmd(), true
 	}
 	return m, nil, false
 }
@@ -450,6 +503,9 @@ func (m *tuiModel) resetFilter() {
 	case viewArtifacts:
 		m.filtArtifacts = m.artifacts
 		m.rebuildArtifactsTable()
+	case viewSkills:
+		m.filtSkills = m.skills
+		m.rebuildSkillsTable()
 	}
 }
 
@@ -464,6 +520,9 @@ func (m *tuiModel) applyFilter(q string) {
 	case viewArtifacts:
 		m.filtArtifacts = filterArtifacts(m.artifacts, q)
 		m.rebuildArtifactsTable()
+	case viewSkills:
+		m.filtSkills = filterSkills(m.skills, q)
+		m.rebuildSkillsTable()
 	}
 }
 
@@ -774,6 +833,83 @@ func (m tuiModel) handleArtifactDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// ── skills keys ──────────────────────────────────────────────────────────────
+
+func (m tuiModel) handleSkillsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.mode == modeFilter {
+		return m.handleFilterKey(msg)
+	}
+	return m.handleSkillsTableKey(msg)
+}
+
+func (m tuiModel) handleSkillsTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if mm, cmd, handled := m.handleResourceKey(msg.String()); handled {
+		return mm, cmd
+	}
+
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+
+	case "/":
+		m.mode = modeFilter
+		m.textInput.Placeholder = "filter skills…"
+		m.textInput.SetValue("")
+		cmd := m.textInput.Focus()
+		return m, cmd
+
+	case "r":
+		m.skillsLoaded = false
+		m.skills = nil
+		m.filtSkills = nil
+		return m, loadSkillsCmd()
+
+	case "y":
+		home, _ := os.UserHomeDir()
+		report := syncSkills(defaultSkillDirs(home))
+		m.saveStatus = report.Summary()
+		m.skillsLoaded = false
+		return m, loadSkillsCmd()
+
+	case "enter":
+		cursor := m.table.Cursor()
+		if cursor >= 0 && cursor < len(m.filtSkills) {
+			m.openSkillDetail(&m.filtSkills[cursor])
+		}
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.table, cmd = m.table.Update(msg)
+	return m, cmd
+}
+
+func (m *tuiModel) openSkillDetail(s *Skill) {
+	m.selectedSkill = s
+	m.view = viewSkillDetail
+	m.viewport = viewport.New(m.width, m.vpHeight())
+	m.viewport.SetContent(m.renderSkill())
+}
+
+func (m tuiModel) handleSkillDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc":
+		m.view = viewSkills
+		m.selectedSkill = nil
+		m.saveStatus = ""
+		return m, nil
+	case "g":
+		m.viewport.GotoTop()
+		return m, nil
+	case "G":
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	return m, cmd
+}
+
 // ── tab bar ───────────────────────────────────────────────────────────────────
 
 func (m tuiModel) renderTabBar() string {
@@ -789,9 +925,15 @@ func (m tuiModel) renderTabBar() string {
 		artCount = fmt.Sprintf("%d", len(m.artifacts))
 	}
 
+	skillCount := "…"
+	if m.skillsLoaded {
+		skillCount = fmt.Sprintf("%d", len(m.skills))
+	}
+
 	isSess := m.view == viewList || m.view == viewDetail
 	isMem := m.view == viewMemories || m.view == viewMemoryDetail
 	isArt := m.view == viewArtifacts || m.view == viewArtifactDetail
+	isSkill := m.view == viewSkills || m.view == viewSkillDetail
 
 	renderTab := func(label, count string, active bool) string {
 		text := label + " " + count
@@ -803,7 +945,8 @@ func (m tuiModel) renderTabBar() string {
 
 	tabs := renderTab("1 Sessions", sessCount, isSess) +
 		"  " + renderTab("2 Memories", memCount, isMem) +
-		"  " + renderTab("3 Artifacts", artCount, isArt)
+		"  " + renderTab("3 Artifacts", artCount, isArt) +
+		"  " + renderTab("4 Skills", skillCount, isSkill)
 
 	return tabBarBgStyle.Width(m.width).Render(tabs)
 }
@@ -844,7 +987,7 @@ func (m tuiModel) listView() string {
 		if v := m.textInput.Value(); v != "" {
 			filterHint = dimStyle.Render("  [" + v + "]")
 		}
-		left := " ↑↓jk: nav  enter: open  /: filter  s: search  r: reload  1/2/3: switch  q: quit"
+		left := " ↑↓jk: nav  enter: open  /: filter  s: search  r: reload  1/2/3/4: switch  q: quit"
 		footer = statusBarStyle.Width(m.width).Render(left + filterHint)
 	}
 
@@ -875,7 +1018,7 @@ func (m tuiModel) memoriesView() string {
 		hint := dimStyle.Render("   enter: apply  esc: clear")
 		footer = inputBarStyle.Width(m.width).Render(label + hint)
 	} else {
-		left := " ↑↓jk: nav  enter: open  /: filter  r: rescan  1/2/3: switch  q: quit"
+		left := " ↑↓jk: nav  enter: open  /: filter  r: rescan  1/2/3/4: switch  q: quit"
 		footer = statusBarStyle.Width(m.width).Render(left)
 	}
 
@@ -906,7 +1049,41 @@ func (m tuiModel) artifactsView() string {
 		hint := dimStyle.Render("   enter: apply  esc: clear")
 		footer = inputBarStyle.Width(m.width).Render(label + hint)
 	} else {
-		left := " ↑↓jk: nav  enter: open  /: filter  r: rescan  1/2/3: switch  q: quit"
+		left := " ↑↓jk: nav  enter: open  /: filter  r: rescan  1/2/3/4: switch  q: quit"
+		footer = statusBarStyle.Width(m.width).Render(left)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, tabBar, body, footer)
+}
+
+func (m tuiModel) skillsView() string {
+	tabBar := m.renderTabBar()
+
+	var body string
+	if !m.skillsLoaded {
+		body = lipgloss.NewStyle().
+			Width(m.width).Height(m.tableHeight()+2).
+			Render(dimStyle.Render("\n  Scanning skills…"))
+	} else if len(m.filtSkills) == 0 {
+		msg := "  No skills found in ~/.copilot/skills, ~/.claude/skills, or canonical store."
+		if m.textInput.Value() != "" {
+			msg = fmt.Sprintf("  No matches for %q.", m.textInput.Value())
+		}
+		body = lipgloss.NewStyle().Width(m.width).Height(m.tableHeight()+2).Render(dimStyle.Render("\n" + msg))
+	} else {
+		body = m.table.View()
+	}
+
+	var footer string
+	if m.mode == modeFilter {
+		label := "/ " + m.textInput.View()
+		hint := dimStyle.Render("   enter: apply  esc: clear")
+		footer = inputBarStyle.Width(m.width).Render(label + hint)
+	} else {
+		left := " ↑↓jk: nav  enter: open  /: filter  y: sync  r: rescan  1/2/3/4: switch  q: quit"
+		if m.saveStatus != "" {
+			left = "  " + m.saveStatus + "  ·  " + left
+		}
 		footer = statusBarStyle.Width(m.width).Render(left)
 	}
 
@@ -1030,6 +1207,26 @@ func (m tuiModel) artifactDetailView() string {
 	return lipgloss.JoinVertical(lipgloss.Left, tabBar, titleBar, meta, vpView, help)
 }
 
+func (m tuiModel) skillDetailView() string {
+	s := m.selectedSkill
+	if s == nil {
+		return ""
+	}
+	tabBar := m.renderTabBar()
+	titleBar := titleBarStyle.Width(m.width).Render(fmt.Sprintf("  SKILL  %s  %s", agentColored(s.Agent), s.Name))
+	metaContent := fmt.Sprintf(" %s  ·  %s  ·  %s", renderSkillLinkTag(*s), formatSize(s.Size), dimStyle.Render(s.Dir))
+	meta := detailMetaStyle.Width(m.width).Render(metaContent)
+
+	vpView := m.viewport.View()
+	pct := fmt.Sprintf("%3.f%%", m.viewport.ScrollPercent()*100)
+	helpLeft := " ↑↓/jk: scroll  PgUp/PgDn: page  g/G: top/bottom  q: back"
+	helpRight := pct + "  "
+	help := statusBarStyle.Width(m.width).Render(
+		helpLeft + strings.Repeat(" ", max(1, m.width-len(helpLeft)-len(helpRight))) + helpRight,
+	)
+	return lipgloss.JoinVertical(lipgloss.Left, tabBar, titleBar, meta, vpView, help)
+}
+
 // ── table helpers ─────────────────────────────────────────────────────────────
 
 func (m *tuiModel) rebuildTable() {
@@ -1129,6 +1326,41 @@ func (m *tuiModel) rebuildArtifactsTable() {
 		}
 	}
 	m.table = buildStyledTable(cols, rows, m.tableHeight(), m.width-2)
+}
+
+func (m *tuiModel) rebuildSkillsTable() {
+	descW := max(20, m.width-58)
+	cols := []table.Column{
+		{Title: "AGENT", Width: 10},
+		{Title: "LINK", Width: 8},
+		{Title: "NAME", Width: 22},
+		{Title: "DESCRIPTION", Width: descW},
+		{Title: "MODIFIED", Width: 10},
+	}
+	rows := make([]table.Row, len(m.filtSkills))
+	for i, s := range m.filtSkills {
+		rows[i] = table.Row{
+			agentColored(s.Agent),
+			renderSkillLinkTag(s),
+			truncate(s.Name, 22),
+			truncate(strings.ReplaceAll(s.Desc, "\n", " "), descW),
+			relTimeColored(s.ModTime),
+		}
+	}
+	m.table = buildStyledTable(cols, rows, m.tableHeight(), m.width-2)
+}
+
+func renderSkillLinkTag(s Skill) string {
+	switch {
+	case s.Agent == "canonical":
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "117", Light: "27"}).Render("source")
+	case s.Synced:
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "120", Light: "28"}).Render("↔ synced")
+	case s.IsSymlink:
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "221", Light: "130"}).Render("symlink")
+	default:
+		return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "203", Light: "124"}).Render("local")
+	}
 }
 
 func buildStyledTable(cols []table.Column, rows []table.Row, height int, width int) table.Model {
@@ -1276,6 +1508,45 @@ func (m tuiModel) renderArtifact() string {
 
 	var sb strings.Builder
 	sb.WriteString(sep + "\n\n")
+	wrapped := wordWrap(content, contentW-2)
+	for _, line := range strings.Split(wrapped, "\n") {
+		sb.WriteString("  " + line + "\n")
+	}
+	return sb.String()
+}
+
+func (m tuiModel) renderSkill() string {
+	s := m.selectedSkill
+	if s == nil {
+		return ""
+	}
+	contentW := m.width - 4
+	if contentW < 20 {
+		contentW = 20
+	}
+	sep := separatorStyle.Render(strings.Repeat("─", contentW))
+
+	var sb strings.Builder
+	sb.WriteString(dimStyle.Render("  name:        ") + s.Name + "\n")
+	sb.WriteString(dimStyle.Render("  agent:       ") + agentColored(s.Agent) + "\n")
+	sb.WriteString(dimStyle.Render("  dir:         ") + s.Dir + "\n")
+	if s.IsSymlink {
+		sb.WriteString(dimStyle.Render("  symlink →    ") + s.LinkTo + "\n")
+	}
+	if s.Desc != "" {
+		sb.WriteString(dimStyle.Render("  description: ") + s.Desc + "\n")
+	}
+	sb.WriteString(dimStyle.Render("  modified:    ") + relTimeColored(s.ModTime) +
+		dimStyle.Render("  ("+s.ModTime.Format("2006-01-02 15:04")+")") + "\n")
+	sb.WriteString("\n" + sep + "\n\n")
+
+	data, err := os.ReadFile(s.SkillFile)
+	var content string
+	if err != nil {
+		content = fmt.Sprintf("Error reading SKILL.md: %v", err)
+	} else {
+		content = string(data)
+	}
 	wrapped := wordWrap(content, contentW-2)
 	for _, line := range strings.Split(wrapped, "\n") {
 		sb.WriteString("  " + line + "\n")
