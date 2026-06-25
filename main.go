@@ -7,9 +7,19 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// isTerminal reports whether fd refers to a terminal (character device).
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
 
 func main() {
 	showStart   := flag.Bool("s", false, "Show start time in listing")
@@ -19,7 +29,17 @@ func main() {
 	showFiles   := flag.Bool("files", false, "List agent artifact files (tool-results, logs)")
 	agentFilter := flag.String("agent", "", "Filter by agent name (claude/gemini/copilot/agy)")
 	projFilter  := flag.String("project", "", "Filter by project name (substring match)")
+	regexFlag   := flag.Bool("regex", false, "Treat -f pattern as a full regex (default: literal + * ? wildcards)")
+	sinceFlag   := flag.String("since", "", "Only sessions updated since (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
+	untilFlag   := flag.String("until", "", "Only sessions updated before (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
+	limitFlag   := flag.Int("limit", 0, "Stop after N search matches (0 = unlimited)")
+	jsonFlag    := flag.Bool("json", false, "Emit one JSON object per search hit (no banners)")
 	flag.Parse()
+
+	// -json and non-TTY stdout both imply -no-tui.
+	if *jsonFlag || !isTerminal(os.Stdout) {
+		*noTUI = true
+	}
 
 	// Default: launch TUI when no arguments are given
 	cliMode := *noTUI || *showMem || *showFiles || *searchQuery != "" ||
@@ -50,6 +70,24 @@ func main() {
 		return
 	}
 
+	since, err := parseTimeFlag(*sinceFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid -since: %v\n", err)
+		os.Exit(1)
+	}
+	until, err := parseTimeFlag(*untilFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid -until: %v\n", err)
+		os.Exit(1)
+	}
+	searchOpts := SearchOptions{
+		Regex: *regexFlag,
+		Since: since,
+		Until: until,
+		Limit: *limitFlag,
+		JSON:  *jsonFlag,
+	}
+
 	sessions := findSessions(home)
 	if *agentFilter != "" || *projFilter != "" {
 		sessions = filterSessionsCLI(sessions, *agentFilter, *projFilter)
@@ -59,7 +97,7 @@ func main() {
 	})
 
 	if *searchQuery != "" {
-		runSearch(sessions, *searchQuery)
+		runSearch(sessions, *searchQuery, searchOpts)
 		return
 	}
 
@@ -73,7 +111,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, "Usage: acv search <query>")
 				os.Exit(1)
 			}
-			runSearch(sessions, strings.Join(args[1:], " "))
+			runSearch(sessions, strings.Join(args[1:], " "), searchOpts)
 			return
 		}
 
@@ -96,7 +134,7 @@ func main() {
 			}
 			// If arg is not a valid path or index, treat it as a search query.
 			if err != nil && !strings.Contains(arg, string(os.PathSeparator)) {
-				runSearch(sessions, strings.Join(args, " "))
+				runSearch(sessions, strings.Join(args, " "), searchOpts)
 				return
 			}
 		}
@@ -157,4 +195,36 @@ func filterSessionsCLI(sessions []Session, agent, project string) []Session {
 		out = append(out, s)
 	}
 	return out
+}
+
+// parseTimeFlag accepts an empty string, a YYYY-MM-DD date, an RFC3339
+// timestamp, or a duration suffix (e.g. "7d", "24h", "2w") interpreted as
+// "now minus that duration".
+func parseTimeFlag(v string) (time.Time, error) {
+	if v == "" {
+		return time.Time{}, nil
+	}
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", v); err == nil {
+		return t, nil
+	}
+	// Duration suffix: support h/m/s natively, plus d (24h) and w (7d).
+	expanded := v
+	if strings.HasSuffix(v, "d") {
+		n, err := strconv.Atoi(strings.TrimSuffix(v, "d"))
+		if err == nil {
+			expanded = fmt.Sprintf("%dh", n*24)
+		}
+	} else if strings.HasSuffix(v, "w") {
+		n, err := strconv.Atoi(strings.TrimSuffix(v, "w"))
+		if err == nil {
+			expanded = fmt.Sprintf("%dh", n*24*7)
+		}
+	}
+	if d, err := time.ParseDuration(expanded); err == nil {
+		return time.Now().Add(-d), nil
+	}
+	return time.Time{}, fmt.Errorf("unrecognised time %q (want YYYY-MM-DD, RFC3339, or duration like 7d/24h)", v)
 }

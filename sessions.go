@@ -396,33 +396,123 @@ func printSession(s *Session, filter string) {
 	}
 }
 
-func runSearch(sessions []Session, query string) {
-	pattern := regexp.QuoteMeta(query)
-	pattern = strings.ReplaceAll(pattern, "\\*", ".*")
-	pattern = strings.ReplaceAll(pattern, "\\?", ".")
-	re, err := regexp.Compile("(?i)" + pattern)
+// SearchOptions controls runSearch behaviour.
+type SearchOptions struct {
+	Regex bool      // treat query as full regex (otherwise literal + * ? wildcards)
+	Since time.Time // only sessions with LastTime >= Since (zero = no lower bound)
+	Until time.Time // only sessions with LastTime <= Until (zero = no upper bound)
+	Limit int       // stop after N matches (0 = unlimited)
+	JSON  bool      // emit one JSON object per match, no banners
+}
+
+// searchHitJSON is the JSON shape emitted in JSON mode.
+type searchHitJSON struct {
+	Agent    string `json:"agent"`
+	Project  string `json:"project"`
+	SessionID string `json:"session_id"`
+	Path     string `json:"path"`
+	Date     string `json:"date"`
+	Role     string `json:"role"`
+	Time     string `json:"time,omitempty"`
+	Snippet  string `json:"snippet"`
+}
+
+func runSearch(sessions []Session, query string, opts SearchOptions) {
+	var (
+		re  *regexp.Regexp
+		err error
+	)
+	if opts.Regex {
+		re, err = regexp.Compile("(?i)" + query)
+	} else {
+		pattern := regexp.QuoteMeta(query)
+		pattern = strings.ReplaceAll(pattern, "\\*", ".*")
+		pattern = strings.ReplaceAll(pattern, "\\?", ".")
+		re, err = regexp.Compile("(?i)" + pattern)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid search pattern: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Searching for: %s\n", query)
-	fmt.Println(strings.Repeat("=", 80))
+
+	if !opts.JSON {
+		fmt.Printf("Searching for: %s\n", query)
+		fmt.Println(strings.Repeat("=", 80))
+	}
+
+	enc := json.NewEncoder(os.Stdout)
 	found := 0
+	scanned := 0
 	for _, s := range sessions {
+		if !opts.Since.IsZero() && s.LastTime.Before(opts.Since) {
+			continue
+		}
+		if !opts.Until.IsZero() && s.LastTime.After(opts.Until) {
+			continue
+		}
+		scanned++
 		for _, m := range s.Messages {
-			if re.MatchString(m.Content) {
-				found++
-				fmt.Printf("[%s] %s | %s | %s\n", s.Agent, s.Project, s.StartTime.Format("2006-01-02"), strings.ToUpper(m.Role))
-				content := strings.ReplaceAll(m.Content, "\n", " ")
-				if len(content) > 100 {
-					content = content[:97] + "..."
-				}
-				fmt.Printf("  %s\n", content)
+			loc := re.FindStringIndex(m.Content)
+			if loc == nil {
+				continue
+			}
+			found++
+			snippet := snippetAround(m.Content, loc, 100)
+			if opts.JSON {
+				_ = enc.Encode(searchHitJSON{
+					Agent:     s.Agent,
+					Project:   s.Project,
+					SessionID: s.ID,
+					Path:      s.Path,
+					Date:      s.StartTime.Format("2006-01-02"),
+					Role:      strings.ToLower(m.Role),
+					Time:      m.Time.Format(time.RFC3339),
+					Snippet:   snippet,
+				})
+			} else {
+				fmt.Printf("[%s] %s | %s | %s | %s\n", s.Agent, s.Project, s.StartTime.Format("2006-01-02"), strings.ToUpper(m.Role), s.ID)
+				fmt.Printf("  path: %s\n", s.Path)
+				fmt.Printf("  %s\n", snippet)
 				fmt.Println(strings.Repeat("-", 40))
+			}
+			if opts.Limit > 0 && found >= opts.Limit {
+				if !opts.JSON {
+					fmt.Printf("\nFound %d matches in %d sessions (limit reached).\n", found, scanned)
+				}
+				return
 			}
 		}
 	}
-	fmt.Printf("\nFound %d matches in %d sessions.\n", found, len(sessions))
+	if !opts.JSON {
+		fmt.Printf("\nFound %d matches in %d sessions.\n", found, scanned)
+	}
+}
+
+// snippetAround returns a single-line excerpt of s of about 2*ctx characters
+// centred on loc=[start,end], with "..." prefix/suffix when truncated.
+func snippetAround(s string, loc []int, ctx int) string {
+	if loc == nil {
+		flat := strings.ReplaceAll(s, "\n", " ")
+		if len(flat) > 2*ctx {
+			return flat[:2*ctx-3] + "..."
+		}
+		return flat
+	}
+	start := loc[0] - ctx
+	end := loc[1] + ctx
+	prefix, suffix := "", ""
+	if start < 0 {
+		start = 0
+	} else {
+		prefix = "..."
+	}
+	if end > len(s) {
+		end = len(s)
+	} else {
+		suffix = "..."
+	}
+	out := strings.ReplaceAll(s[start:end], "\n", " ")
+	return prefix + strings.TrimSpace(out) + suffix
 }
 
 func extractTitle(messages []Message) string {
