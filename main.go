@@ -22,19 +22,19 @@ func isTerminal(f *os.File) bool {
 }
 
 func main() {
-	showStart    := flag.Bool("s", false, "Show start time in listing")
-	searchQuery  := flag.String("f", "", "Search for pattern in all sessions (supports * and ?)")
-	noTUI        := flag.Bool("no-tui", false, "Disable TUI, use plain CLI output")
-	showMem      := flag.Bool("memories", false, "List agent memory files")
-	showFiles    := flag.Bool("files", false, "List agent artifact files (tool-results, logs)")
-	syncSkillsF  := flag.Bool("sync-skills", false, "Sync skills from canonical dir to per-agent dirs")
-	agentFilter  := flag.String("agent", "", "Filter by agent name (claude/gemini/copilot/agy)")
-	projFilter   := flag.String("project", "", "Filter by project name (substring match)")
-	regexFlag    := flag.Bool("regex", false, "Treat -f pattern as a full regex (default: literal + * ? wildcards)")
-	sinceFlag    := flag.String("since", "", "Only sessions updated since (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
-	untilFlag    := flag.String("until", "", "Only sessions updated before (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
-	limitFlag    := flag.Int("limit", 0, "Stop after N search matches (0 = unlimited)")
-	jsonFlag     := flag.Bool("json", false, "Emit one JSON object per search hit (no banners)")
+	showStart := flag.Bool("s", false, "Show start time in listing")
+	searchQuery := flag.String("f", "", "Search for pattern in all sessions (supports * and ?)")
+	noTUI := flag.Bool("no-tui", false, "Disable TUI, use plain CLI output")
+	showMem := flag.Bool("memories", false, "List agent memory files")
+	showFiles := flag.Bool("files", false, "List agent artifact files (tool-results, logs)")
+	syncSkillsF := flag.Bool("sync-skills", false, "Sync skills from canonical dir to per-agent dirs")
+	agentFilter := flag.String("agent", "", "Filter by agent name (claude/gemini/copilot/agy)")
+	projFilter := flag.String("project", "", "Filter by project name (substring match)")
+	regexFlag := flag.Bool("regex", false, "Treat -f pattern as a full regex (default: literal + * ? wildcards)")
+	sinceFlag := flag.String("since", "", "Only sessions updated since (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
+	untilFlag := flag.String("until", "", "Only sessions updated before (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
+	limitFlag := flag.Int("limit", 0, "Stop after N search matches (0 = unlimited)")
+	jsonFlag := flag.Bool("json", false, "Emit one JSON object per search hit (no banners)")
 	flag.Parse()
 
 	// -json and non-TTY stdout both imply -no-tui.

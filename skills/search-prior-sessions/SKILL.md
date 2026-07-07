@@ -31,7 +31,14 @@ acv is developed at https://github.com/manno/agent-chat-viewer
 
 ## Usage
 
-Always run with `-no-tui` so output is plain text:
+Prefer `-json` for programmatic use — it's a stable, greppable/jq-able
+shape and avoids parsing the human-oriented banner format:
+
+```sh
+acv -json -f 'PATTERN'
+```
+
+Use plain `-no-tui` only when showing raw output directly to a human:
 
 ```sh
 acv -no-tui -f 'PATTERN'
@@ -51,7 +58,9 @@ user and assistant messages.
   (interpreted as "now minus that duration").
 - `-limit N` — stop after N matches (avoids dumping huge result sets)
 - `-json` — emit one JSON object per hit, no banners (implies `-no-tui`).
-  Fields: `agent`, `project`, `session_id`, `path`, `date`, `role`, `time`, `snippet`.
+  Fields: `agent`, `project`, `session_id`, `title`, `path`, `date`, `role`,
+  `time`, `snippet`. `title` is the session's extracted title, useful for
+  telling hits apart without opening each session.
 - `-s` — include start time in listing
 - `-files` — list agent artifact files (tool-results, logs) instead of messages
 - `-memories` — list agent memory files instead of messages
@@ -63,32 +72,62 @@ piping `acv -f ...` from a script works without it.
 
 Find every session mentioning a symbol:
 ```sh
-acv -no-tui -f 'rancher-webhook'
+acv -json -f 'rancher-webhook'
 ```
 
 Restrict to a specific agent and project:
 ```sh
-acv -no-tui -agent copilot -project rancher-image-metadata -f 'enrich-mirror'
+acv -json -agent copilot -project rancher-image-metadata -f 'enrich-mirror'
 ```
 
 Wildcards:
 ```sh
-acv -no-tui -f 'helm*chart'
+acv -json -f 'helm*chart'
 ```
 
-Recent sessions only, with a hard cap, as JSON for downstream parsing:
+Recent sessions only, with a hard cap:
 ```sh
 acv -json -since 7d -limit 20 -f 'oauth'
 ```
 
 Use a real regex:
 ```sh
-acv -no-tui -regex -f 'foo(bar|baz)+'
+acv -json -regex -f 'foo(bar|baz)+'
 ```
 
-## Reading the output
+### jq recipes for JSON output
 
-Each hit is a single matching message, formatted as:
+Each line is one JSON hit (see fields above). Common follow-ups:
+
+Human-readable one-liners, most recent first (input is already sorted):
+```sh
+acv -json -f 'oauth' | jq -r '"\(.date) [\(.agent)] \(.title) — \(.snippet)"'
+```
+
+Unique session paths that matched (to open each session once):
+```sh
+acv -json -f 'oauth' | jq -r '.path' | sort -u
+```
+
+Count matches per project:
+```sh
+acv -json -f 'oauth' | jq -r '.project' | sort | uniq -c | sort -rn
+```
+
+Count total matches / distinct sessions:
+```sh
+acv -json -f 'oauth' | jq -s 'length'
+acv -json -f 'oauth' | jq -s '[.[].session_id] | unique | length'
+```
+
+Only assistant messages, deduped by session (first match per session):
+```sh
+acv -json -f 'oauth' | jq -s 'group_by(.session_id) | map(.[0])'
+```
+
+## Reading the output (non-JSON)
+
+When run without `-json`, each hit is a single matching message, formatted as:
 
 ```
 [<agent>] <project> | <YYYY-MM-DD> | <USER|ASSISTANT> | <session-id>
@@ -113,5 +152,5 @@ dependent and can shift between runs — prefer the path).
 - For Copilot-specific structured queries (token usage, tool calls,
   PR/issue refs, exact timestamps), prefer `session_store_sql` — it
   has richer schema. Use `acv` for free-text recall across agents.
-- Always pass `-no-tui`; the default TUI mode is interactive and not
-  usable from a non-interactive shell.
+- Always pass `-json` (or at least `-no-tui`); the default TUI mode is
+  interactive and not usable from a non-interactive shell.

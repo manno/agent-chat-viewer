@@ -407,14 +407,15 @@ type SearchOptions struct {
 
 // searchHitJSON is the JSON shape emitted in JSON mode.
 type searchHitJSON struct {
-	Agent    string `json:"agent"`
-	Project  string `json:"project"`
+	Agent     string `json:"agent"`
+	Project   string `json:"project"`
 	SessionID string `json:"session_id"`
-	Path     string `json:"path"`
-	Date     string `json:"date"`
-	Role     string `json:"role"`
-	Time     string `json:"time,omitempty"`
-	Snippet  string `json:"snippet"`
+	Title     string `json:"title,omitempty"`
+	Path      string `json:"path"`
+	Date      string `json:"date"`
+	Role      string `json:"role"`
+	Time      string `json:"time,omitempty"`
+	Snippet   string `json:"snippet"`
 }
 
 func runSearch(sessions []Session, query string, opts SearchOptions) {
@@ -463,6 +464,7 @@ func runSearch(sessions []Session, query string, opts SearchOptions) {
 					Agent:     s.Agent,
 					Project:   s.Project,
 					SessionID: s.ID,
+					Title:     s.Title,
 					Path:      s.Path,
 					Date:      s.StartTime.Format("2006-01-02"),
 					Role:      strings.ToLower(m.Role),
@@ -560,7 +562,7 @@ func extractTitle(messages []Message) string {
 		old := cleaned
 		cleaned = strings.TrimSpace(cleaned)
 		cleaned = strings.TrimLeft(cleaned, "#*-> \t")
-		
+
 		// If it starts with a number followed by dot and space (like "1. "), strip it
 		if len(cleaned) > 2 && cleaned[0] >= '0' && cleaned[0] <= '9' {
 			idx := 0
@@ -620,10 +622,10 @@ func parseAgy(path string, home string) (*Session, error) {
 	s.Project = getProjectFromCache(home, s.ID)
 
 	type AgyLine struct {
-		Type      string            `json:"type"`
-		CreatedAt string            `json:"created_at"`
-		Content   string            `json:"content"`
-		Thinking  string            `json:"thinking"`
+		Type      string `json:"type"`
+		CreatedAt string `json:"created_at"`
+		Content   string `json:"content"`
+		Thinking  string `json:"thinking"`
 		ToolCalls []struct {
 			Name string          `json:"name"`
 			Args json.RawMessage `json:"args"`
@@ -702,7 +704,7 @@ func getProjectFromCache(home string, id string) string {
 			}
 		}
 	}
-	
+
 	projectsPath := filepath.Join(home, ".gemini", "antigravity-cli", "cache", "projects.json")
 	if data, err := os.ReadFile(projectsPath); err == nil {
 		var mapping map[string]string
@@ -714,7 +716,7 @@ func getProjectFromCache(home string, id string) string {
 			}
 		}
 	}
-	
+
 	return ""
 }
 
@@ -723,7 +725,7 @@ func cleanUserContent(content string) string {
 	if start != -1 {
 		end := strings.Index(content, "</USER_REQUEST>")
 		if end != -1 && end > start {
-			return strings.TrimSpace(content[start+len("<USER_REQUEST>"):end])
+			return strings.TrimSpace(content[start+len("<USER_REQUEST>") : end])
 		}
 	}
 	return content
