@@ -31,6 +31,7 @@ func main() {
 	agentFilter := flag.String("agent", "", "Filter by agent name (claude/gemini/copilot/agy)")
 	projFilter := flag.String("project", "", "Filter by project name (substring match)")
 	regexFlag := flag.Bool("regex", false, "Treat -f pattern as a full regex (default: literal + * ? wildcards)")
+	phraseFlag := flag.Bool("phrase", false, "Match -f pattern as one literal phrase instead of AND-ing space-separated terms")
 	sinceFlag := flag.String("since", "", "Only sessions updated since (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
 	untilFlag := flag.String("until", "", "Only sessions updated before (YYYY-MM-DD, RFC3339, or duration like 7d/24h)")
 	limitFlag := flag.Int("limit", 0, "Stop after N search matches (0 = unlimited)")
@@ -103,11 +104,12 @@ func main() {
 		os.Exit(1)
 	}
 	searchOpts := SearchOptions{
-		Regex: *regexFlag,
-		Since: since,
-		Until: until,
-		Limit: *limitFlag,
-		JSON:  *jsonFlag,
+		Regex:  *regexFlag,
+		Phrase: *phraseFlag,
+		Since:  since,
+		Until:  until,
+		Limit:  *limitFlag,
+		JSON:   *jsonFlag,
 	}
 
 	sessions := findSessions(home)

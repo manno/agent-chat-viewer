@@ -47,10 +47,19 @@ acv -no-tui -f 'PATTERN'
 `-f` accepts glob-style wildcards (`*`, `?`). The pattern matches both
 user and assistant messages.
 
+**Multi-word queries are AND'd, not treated as a phrase.** If your query
+has spaces (e.g. `-f 'Dockerfile mermaid'`), each space-separated word
+must appear *somewhere* in the message (any order, not necessarily
+adjacent) — it does NOT require the exact phrase "Dockerfile mermaid".
+This is almost always what you want when recalling a topic. Use
+`-phrase` if you need the old exact-substring-with-wildcards behavior
+for a specific multi-word phrase.
+
 ### Useful flags
 
 - `-f 'pattern'` — search for pattern across all sessions (required for search)
 - `-regex` — treat `-f` pattern as a full regex (default is literal with `*` and `?` wildcards)
+- `-phrase` — match `-f` as one literal phrase instead of AND-ing space-separated words
 - `-agent <name>` — restrict to `copilot`, `claude`, `gemini`, or `agy`
 - `-project <substr>` — restrict to a project (substring match on path)
 - `-since <when>` / `-until <when>` — filter by session last-update time.
@@ -88,6 +97,12 @@ acv -json -f 'helm*chart'
 Recent sessions only, with a hard cap:
 ```sh
 acv -json -since 7d -limit 20 -f 'oauth'
+```
+
+Multi-word topic recall (AND semantics — matches sessions containing
+both words anywhere, not adjacent):
+```sh
+acv -json -f 'Dockerfile mermaid diagram'
 ```
 
 Use a real regex:

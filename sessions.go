@@ -398,11 +398,12 @@ func printSession(s *Session, filter string) {
 
 // SearchOptions controls runSearch behaviour.
 type SearchOptions struct {
-	Regex bool      // treat query as full regex (otherwise literal + * ? wildcards)
-	Since time.Time // only sessions with LastTime >= Since (zero = no lower bound)
-	Until time.Time // only sessions with LastTime <= Until (zero = no upper bound)
-	Limit int       // stop after N matches (0 = unlimited)
-	JSON  bool      // emit one JSON object per match, no banners
+	Regex  bool      // treat query as full regex (otherwise literal + * ? wildcards)
+	Phrase bool      // match query as one literal phrase instead of AND-ing space-separated terms
+	Since  time.Time // only sessions with LastTime >= Since (zero = no lower bound)
+	Until  time.Time // only sessions with LastTime <= Until (zero = no upper bound)
+	Limit  int       // stop after N matches (0 = unlimited)
+	JSON   bool      // emit one JSON object per match, no banners
 }
 
 // searchHitJSON is the JSON shape emitted in JSON mode.
@@ -418,22 +419,46 @@ type searchHitJSON struct {
 	Snippet   string `json:"snippet"`
 }
 
-func runSearch(sessions []Session, query string, opts SearchOptions) {
-	var (
-		re  *regexp.Regexp
-		err error
-	)
-	if opts.Regex {
-		re, err = regexp.Compile("(?i)" + query)
-	} else {
-		pattern := regexp.QuoteMeta(query)
-		pattern = strings.ReplaceAll(pattern, "\\*", ".*")
-		pattern = strings.ReplaceAll(pattern, "\\?", ".")
-		re, err = regexp.Compile("(?i)" + pattern)
+// compileSearchTerm turns a single search term into a case-insensitive
+// regexp, treating it as a literal string with * and ? wildcards unless
+// regexMode is set, in which case term is compiled as a full regex.
+func compileSearchTerm(term string, regexMode bool) (*regexp.Regexp, error) {
+	if regexMode {
+		return regexp.Compile("(?i)" + term)
 	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Invalid search pattern: %v\n", err)
-		os.Exit(1)
+	pattern := regexp.QuoteMeta(term)
+	pattern = strings.ReplaceAll(pattern, "\\*", ".*")
+	pattern = strings.ReplaceAll(pattern, "\\?", ".")
+	return regexp.Compile("(?i)" + pattern)
+}
+
+func runSearch(sessions []Session, query string, opts SearchOptions) {
+	// By default, a query with multiple space-separated words is treated as
+	// an AND of independent terms (each may appear anywhere in the message,
+	// in any order) since that best matches how agents/users type free-text
+	// queries. -phrase (or -regex, where the whole query is one pattern)
+	// preserves the old single-literal-pattern behaviour.
+	var terms []*regexp.Regexp
+	if opts.Regex || opts.Phrase {
+		re, err := compileSearchTerm(query, opts.Regex)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid search pattern: %v\n", err)
+			os.Exit(1)
+		}
+		terms = []*regexp.Regexp{re}
+	} else {
+		words := strings.Fields(query)
+		if len(words) == 0 {
+			words = []string{query}
+		}
+		for _, w := range words {
+			re, err := compileSearchTerm(w, false)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Invalid search pattern: %v\n", err)
+				os.Exit(1)
+			}
+			terms = append(terms, re)
+		}
 	}
 
 	if !opts.JSON {
@@ -453,12 +478,23 @@ func runSearch(sessions []Session, query string, opts SearchOptions) {
 		}
 		scanned++
 		for _, m := range s.Messages {
-			loc := re.FindStringIndex(m.Content)
-			if loc == nil {
+			var firstLoc []int
+			matched := true
+			for i, re := range terms {
+				loc := re.FindStringIndex(m.Content)
+				if loc == nil {
+					matched = false
+					break
+				}
+				if i == 0 {
+					firstLoc = loc
+				}
+			}
+			if !matched {
 				continue
 			}
 			found++
-			snippet := snippetAround(m.Content, loc, 100)
+			snippet := snippetAround(m.Content, firstLoc, 100)
 			if opts.JSON {
 				_ = enc.Encode(searchHitJSON{
 					Agent:     s.Agent,
