@@ -151,14 +151,18 @@ When run without `-json`, each hit is a single matching message, formatted as:
 ----------------------------------------
 ```
 
-To open the full session, pass the `path` to `acv`:
+To open the full session, pass its `session_id` (or `path`) to `acv`:
 
 ```sh
+acv -no-tui 8d2c6cc4-8a5d-4dd8-984d-93e8f78e7786
 acv -no-tui /Users/.../session-state/<uuid>/events.jsonl
 ```
 
-Or use the index from `acv -no-tui` (note: index is sort-order
-dependent and can shift between runs — prefer the path).
+An unambiguous ID prefix also works. Without `-no-tui`, the same
+`acv <session-id>` opens the TUI straight into that session's detail
+view instead of printing it. Or use the index from `acv -no-tui`
+(note: index is sort-order dependent and can shift between runs —
+prefer the ID or path).
 
 ## Tips
 

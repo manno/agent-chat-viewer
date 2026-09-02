@@ -223,6 +223,10 @@ type tuiModel struct {
 	selected   *Session
 	roleFilter string
 	saveStatus string
+
+	// pendingSessionID, when set, is looked up as soon as sessions finish
+	// loading and its detail view is opened automatically.
+	pendingSessionID string
 }
 
 func newTUI() tuiModel {
@@ -239,6 +243,14 @@ func newTUI() tuiModel {
 		textInput: ti,
 		spinner:   sp,
 	}
+}
+
+// newTUIForSession starts the TUI and, once sessions finish loading, jumps
+// straight into the detail view for the session whose ID matches id.
+func newTUIForSession(id string) tuiModel {
+	m := newTUI()
+	m.pendingSessionID = id
+	return m
 }
 
 // ── tea interface ─────────────────────────────────────────────────────────────
@@ -318,6 +330,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessions = msg.sessions
 		m.view = viewList
 		m.rebuildTable()
+		if m.pendingSessionID != "" {
+			id := m.pendingSessionID
+			m.pendingSessionID = ""
+			if exact, matches := findSessionByID(m.allSessions, id); exact != nil {
+				m.openDetail(exact)
+			} else if len(matches) > 1 {
+				m.saveStatus = fmt.Sprintf("ambiguous session ID %q matches %d sessions", id, len(matches))
+			} else {
+				m.saveStatus = fmt.Sprintf("no session found for ID %q", id)
+			}
+		}
 		return m, nil
 
 	case memoriesLoadedMsg:

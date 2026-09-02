@@ -109,6 +109,30 @@ func findAndSortSessions(home string) []Session {
 	return sessions
 }
 
+// findSessionByID looks up a session by its ID, which is normally the agent's
+// UUID-based session file/directory name (an extension like ".jsonl" may
+// follow it). An exact match is returned if there is one; otherwise, a
+// case-insensitive prefix match is tried. If exactly one session's ID starts
+// with id, it is returned as the match. If more than one does, exact is nil
+// and matches lists all of them so the caller can disambiguate.
+func findSessionByID(sessions []Session, id string) (exact *Session, matches []Session) {
+	for i := range sessions {
+		if sessions[i].ID == id {
+			return &sessions[i], nil
+		}
+	}
+	lower := strings.ToLower(id)
+	for i := range sessions {
+		if strings.HasPrefix(strings.ToLower(sessions[i].ID), lower) {
+			matches = append(matches, sessions[i])
+		}
+	}
+	if len(matches) == 1 {
+		return &matches[0], nil
+	}
+	return nil, matches
+}
+
 func parseSession(path string) (*Session, error) {
 	if strings.Contains(path, ".copilot") {
 		// Directory-based session (new format)

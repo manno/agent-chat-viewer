@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,6 +12,34 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+var sessionIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{6,}$`)
+
+// sessionIDArg reports whether arg looks like a session ID — the hex/hyphen
+// UUID-based names the agents give their session files — as opposed to a
+// list index, search query, or path. Purely numeric strings are excluded so
+// "acv 3" still means index 3.
+func sessionIDArg(arg string) bool {
+	if !sessionIDPattern.MatchString(arg) {
+		return false
+	}
+	for _, r := range arg {
+		if r < '0' || r > '9' {
+			return true
+		}
+	}
+	return false
+}
+
+// printAmbiguousSessionID reports the candidate sessions for an ambiguous ID
+// prefix to stderr and exits.
+func printAmbiguousSessionID(arg string, matches []Session) {
+	fmt.Fprintf(os.Stderr, "Ambiguous session ID %q matches %d sessions:\n", arg, len(matches))
+	for _, s := range matches {
+		fmt.Fprintf(os.Stderr, "  %.12s  [%s] %s\n", s.ID, s.Agent, s.Title)
+	}
+	os.Exit(1)
+}
 
 // isTerminal reports whether fd refers to a terminal (character device).
 func isTerminal(f *os.File) bool {
@@ -43,6 +72,33 @@ func main() {
 		*noTUI = true
 	}
 
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// "acv <session-id>" jumps straight into the TUI on that conversation,
+	// e.g. acv 8d2c6cc4-8a5d-4dd8-984d-93e8f78e7786 (a prefix works too).
+	if !*noTUI && flag.NArg() == 1 && *searchQuery == "" && *agentFilter == "" && *projFilter == "" &&
+		!*showMem && !*showFiles && !*syncSkillsF {
+		if arg := flag.Args()[0]; sessionIDArg(arg) {
+			sessions := findAndSortSessions(home)
+			if exact, matches := findSessionByID(sessions, arg); exact != nil {
+				p := tea.NewProgram(newTUIForSession(exact.ID), tea.WithAltScreen())
+				if _, err := p.Run(); err != nil {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+					os.Exit(1)
+				}
+				return
+			} else if len(matches) > 1 {
+				printAmbiguousSessionID(arg, matches)
+			}
+			// No match — fall through to the existing CLI handling below,
+			// which treats an unrecognised arg as a search query.
+		}
+	}
+
 	// Default: launch TUI when no arguments are given
 	cliMode := *noTUI || *showMem || *showFiles || *syncSkillsF || *searchQuery != "" ||
 		flag.NArg() > 0 || *agentFilter != "" || *projFilter != ""
@@ -56,11 +112,6 @@ func main() {
 	}
 
 	// CLI mode ──────────────────────────────────────────────────────────────
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
-		os.Exit(1)
-	}
 
 	if *showMem {
 		printMemories(findMemories(home), *agentFilter, *projFilter)
@@ -142,21 +193,38 @@ func main() {
 		var session *Session
 
 		idx, idxErr := strconv.Atoi(arg)
-		if idxErr == nil && idx >= 0 && idx < len(sessions) {
+		switch {
+		case idxErr == nil && idx >= 0 && idx < len(sessions):
 			s := sessions[idx]
 			session, err = parseSession(s.Path)
 			if session != nil {
 				session.Size = s.Size
 				session.LastTime = s.LastTime
 			}
-		} else {
+
+		case sessionIDArg(arg):
+			exact, matches := findSessionByID(sessions, arg)
+			switch {
+			case exact != nil:
+				session, err = parseSession(exact.Path)
+				if session != nil {
+					session.Size = exact.Size
+					session.LastTime = exact.LastTime
+				}
+			case len(matches) > 1:
+				printAmbiguousSessionID(arg, matches)
+			default:
+				err = fmt.Errorf("no session found for ID %q", arg)
+			}
+
+		default:
 			session, err = parseSession(arg)
 			if session != nil {
 				if info, errStat := os.Stat(arg); errStat == nil {
 					session.Size = info.Size()
 				}
 			}
-			// If arg is not a valid path or index, treat it as a search query.
+			// If arg is not a valid path, ID, or index, treat it as a search query.
 			if err != nil && !strings.Contains(arg, string(os.PathSeparator)) {
 				runSearch(sessions, strings.Join(args, " "), searchOpts)
 				return

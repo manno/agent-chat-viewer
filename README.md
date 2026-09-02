@@ -27,6 +27,9 @@ mv acv /usr/local/bin/
 
 ```bash
 acv
+
+# Jump straight into a conversation by session ID (a prefix works too)
+acv 8d2c6cc4-8a5d-4dd8-984d-93e8f78e7786
 ```
 
 | Key | Action |
