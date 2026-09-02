@@ -350,6 +350,9 @@ func syncSkills(dirs SkillDirs) SyncReport {
 			continue
 		}
 		for _, ad := range agentDirs {
+			if ad.path == "" {
+				continue
+			}
 			dest := filepath.Join(ad.path, e.Name())
 			info, err := os.Lstat(dest)
 			if err != nil {
