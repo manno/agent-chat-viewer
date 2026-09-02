@@ -17,7 +17,7 @@ import (
 // directory and is identified by the presence of a SKILL.md file with YAML
 // frontmatter (at least a "name:" field).
 type Skill struct {
-	Agent     string    // "copilot" | "claude" | "canonical"
+	Agent     string    // "copilot" | "claude" | "agy" | "canonical"
 	Name      string    // from frontmatter name: (falls back to dir name)
 	Desc      string    // from frontmatter description:
 	Dir       string    // path to the skill directory
@@ -33,6 +33,7 @@ type Skill struct {
 type SkillDirs struct {
 	Copilot   string
 	Claude    string
+	Agy       string
 	Canonical string
 }
 
@@ -46,6 +47,7 @@ func defaultSkillDirs(home string) SkillDirs {
 	return SkillDirs{
 		Copilot:   filepath.Join(home, ".copilot", "skills"),
 		Claude:    filepath.Join(home, ".claude", "skills"),
+		Agy:       filepath.Join(home, ".gemini", "config", "skills"),
 		Canonical: canonical,
 	}
 }
@@ -64,9 +66,12 @@ func findSkillsIn(dirs SkillDirs) []Skill {
 	}{
 		{"copilot", dirs.Copilot},
 		{"claude", dirs.Claude},
+		{"agy", dirs.Agy},
 		{"canonical", dirs.Canonical},
 	} {
-		out = append(out, scanSkillDir(d.agent, d.path, dirs.Canonical)...)
+		if d.path != "" {
+			out = append(out, scanSkillDir(d.agent, d.path, dirs.Canonical)...)
+		}
 	}
 	// Deduplicate: synced agent entries are symlinks into canonical, so they
 	// are already represented by the canonical entry. Drop them.
@@ -87,6 +92,9 @@ func findSkillsIn(dirs SkillDirs) []Skill {
 }
 
 func scanSkillDir(agent, root, canonical string) []Skill {
+	if root == "" {
+		return nil
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil
@@ -215,7 +223,7 @@ func (r SyncReport) Summary() string {
 // one already present in canonical. The user must choose which side wins.
 type SkillConflict struct {
 	Name     string // skill directory name
-	Agent    string // "copilot" | "claude"
+	Agent    string // "copilot" | "claude" | "agy"
 	AgentDir string // absolute path to the agent-local copy
 	CanonDir string // absolute path to the canonical copy
 	DiffText string // precomputed unified diff of SKILL.md, "" if identical
@@ -248,11 +256,15 @@ func syncSkills(dirs SkillDirs) SyncReport {
 	}{
 		{"copilot", dirs.Copilot},
 		{"claude", dirs.Claude},
+		{"agy", dirs.Agy},
 	}
 
 	// Phase 1: move real agent skill dirs into canonical (when no collision)
 	// and symlink them back.
 	for _, ad := range agentDirs {
+		if ad.path == "" {
+			continue
+		}
 		if err := os.MkdirAll(ad.path, 0o755); err != nil {
 			r.Errors = append(r.Errors, fmt.Sprintf("%s: mkdir: %v", ad.agent, err))
 			continue
