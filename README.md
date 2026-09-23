@@ -2,6 +2,19 @@
 
 A terminal UI for browsing and searching chat history from AI agent CLIs.
 
+![Session list](docs/list.png)
+
+Open a session to read the transcript:
+
+![Session detail](docs/detail.png)
+
+Press `s` to search message content across every agent at once:
+
+![Content search](docs/search.png)
+
+> The screenshots are rendered from fabricated sessions, not anyone's real chat
+> history. Regenerate them with `hack/screenshot.sh`.
+
 ## Supported agents
 
 - **Claude Code** — `~/.claude/projects/`
